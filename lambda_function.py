@@ -1,0 +1,505 @@
+"""
+Client Portfolio — prototype (Gracia Group)
+
+Lambda behind a Function URL. Renders a client's holdings, values each against a
+market-price estimate, and persists newly-entered holdings to S3.
+
+AUTH: magic-link + signed session cookie (HMAC, same pattern as deal_update_form).
+A client opens /?client=<id>&token=<hmac> once; that sets a 30-day signed
+session cookie, and every read/write is scoped to the client the cookie proves.
+Generate a client's link locally:  python portfolio_lambda.py <client_id> <base_url>
+(the HMAC_SECRET env var must match production).
+
+PROTOTYPE SCOPE / KNOWN LIMITS — read before this touches a real client:
+  - The magic link is permanent per client (HMAC over client_id). If you want
+    links that expire, add an expiry into the token; the session cookie already
+    expires after SESSION_DAYS.
+  - PRICES below are PLACEHOLDER marks. Swap in real {company_id: price} pairs.
+    Later this gets replaced by reading the persisted price feed off
+    companies.json instead of being hardcoded here.
+  - Storage is one JSON object per client in S3, whole-object read-modify-write.
+    Fine for a handful of clients; revisit if concurrency or volume grows.
+"""
+
+import os
+import json
+import time
+import base64
+import hmac
+import hashlib
+import html
+import urllib.parse
+import uuid
+from datetime import datetime, timezone
+
+import boto3
+from botocore.exceptions import ClientError
+
+# ── Config ────────────────────────────────────────────────────────────────────
+BUCKET       = "gracia-portfolios"                       # TODO: set to your bucket
+HMAC_SECRET  = os.environ.get("HMAC_SECRET", "change-me-in-env")  # set in Lambda env
+COOKIE_NAME  = "gg_session"
+SESSION_DAYS = 30
+
+# ── PLACEHOLDER pricing + company list ──────────────────────────────────────────
+# Replace with real Company IDs and Hiive Prices. This dict doubles as the
+# company picker: a client can only select a company we have a price for, which
+# guarantees we have a company_id to value against.
+PRICES = {
+    "9000001": {"name": "Example Company A", "hiive_price": 100.00, "as_of": "2026-05-08"},
+    "9000002": {"name": "Example Company B", "hiive_price":  42.50, "as_of": "2026-05-08"},
+    "9000003": {"name": "Example Company C", "hiive_price":  18.75, "as_of": "2026-05-08"},
+}
+
+# Exact CRM Structure values (custom_label_3064360)
+STRUCTURES = ["Direct", "Fund/SPV", "Forward", "Unknown", "None"]
+# Structures where shares x underlying mark is NOT a clean position value
+INDIRECT_STRUCTURES = {"Fund/SPV", "Forward"}
+
+
+# ── Storage (S3, one object per client) ─────────────────────────────────────────
+def _key(client_id):
+    return f"portfolios/{client_id}.json"
+
+
+def load_portfolio(client_id):
+    s3 = boto3.client("s3")
+    try:
+        obj = s3.get_object(Bucket=BUCKET, Key=_key(client_id))
+        return json.loads(obj["Body"].read())
+    except ClientError as e:
+        # Only a genuine "not found" means an empty portfolio. Any other error
+        # must raise — silently returning empty here would let a later save wipe
+        # a real portfolio on a transient read failure.
+        if e.response["Error"]["Code"] in ("NoSuchKey", "404"):
+            return {"client_id": client_id, "holdings": []}
+        raise
+
+
+def save_portfolio(portfolio):
+    s3 = boto3.client("s3")
+    s3.put_object(
+        Bucket=BUCKET,
+        Key=_key(portfolio["client_id"]),
+        ContentType="application/json",
+        Body=json.dumps(portfolio).encode("utf-8"),
+    )
+
+
+# ── Mutations ───────────────────────────────────────────────────────────────────
+def _to_float(v):
+    try:
+        v = (v or "").strip()
+        return float(v) if v != "" else None
+    except (TypeError, ValueError):
+        return None
+
+
+def add_holding(portfolio, form):
+    company_id = (form.get("company_id") or "").strip()
+    if company_id not in PRICES:
+        return  # unknown company; the picker should prevent this
+    structure = form.get("structure", "None")
+    if structure not in STRUCTURES:
+        structure = "None"
+    txn = (form.get("transaction_date") or "").strip() or None
+    now = datetime.now(timezone.utc).isoformat()
+    portfolio["holdings"].append({
+        "holding_id": "hld_" + uuid.uuid4().hex[:8],
+        "company_id": company_id,
+        "company_name": PRICES[company_id]["name"],
+        "shares": _to_float(form.get("shares")),
+        "pps_cost": _to_float(form.get("pps_cost")),   # Gross PPS the client paid
+        "structure": structure,
+        "transaction_date": txn,                       # optional, manual
+        "created_at": now,
+        "updated_at": now,
+    })
+
+
+def remove_holding(portfolio, holding_id):
+    portfolio["holdings"] = [
+        h for h in portfolio["holdings"] if h.get("holding_id") != holding_id
+    ]
+
+
+# ── Valuation (computed at read time, never stored) ──────────────────────────────
+def value_holding(h):
+    info = PRICES.get(h.get("company_id"))
+    hp = info["hiive_price"] if info else None
+    shares, pps = h.get("shares"), h.get("pps_cost")
+    current = shares * hp if (shares is not None and hp is not None) else None
+    cost = shares * pps if (shares is not None and pps is not None) else None
+    gl = current - cost if (current is not None and cost is not None) else None
+    return {
+        "hiive_price": hp,
+        "as_of": info["as_of"] if info else None,
+        "current": current,
+        "cost": cost,
+        "gl": gl,
+    }
+
+
+# ── Formatting helpers ───────────────────────────────────────────────────────────
+def _money(v):
+    if v is None:
+        return "—"
+    sign = "-" if v < 0 else ""
+    return "{}${:,.2f}".format(sign, abs(v))
+
+
+def _shares(v):
+    if v is None:
+        return "—"
+    return "{:,.0f}".format(v) if float(v).is_integer() else "{:,.2f}".format(v)
+
+
+def _gl_class(v):
+    if v is None:
+        return ""
+    return "pos" if v >= 0 else "neg"
+
+
+# ── Render ───────────────────────────────────────────────────────────────────────
+def render_portfolio(portfolio):
+    holdings = portfolio.get("holdings", [])
+    rows = ""
+    tot_current = tot_cost = 0.0
+    have_any_value = False
+    have_indirect = False
+
+    for h in holdings:
+        v = value_holding(h)
+        if v["current"] is not None:
+            tot_current += v["current"]
+            have_any_value = True
+        if v["cost"] is not None:
+            tot_cost += v["cost"]
+
+        indirect_mark = h.get("structure") in INDIRECT_STRUCTURES and v["current"] is not None
+        if indirect_mark:
+            have_indirect = True
+
+        price_cell = _money(v["hiive_price"])
+        if v["as_of"]:
+            price_cell += f'<span class="asof">{html.escape(v["as_of"])}</span>'
+
+        value_cell = _money(v["current"])
+        if indirect_mark:
+            value_cell += '<span class="flag">*</span>'
+
+        txn = html.escape(h.get("transaction_date") or "—")
+
+        rows += f"""
+        <tr>
+          <td class="co">{html.escape(h.get("company_name", ""))}
+              <span class="struct">{html.escape(h.get("structure", ""))}</span></td>
+          <td class="num">{_shares(h.get("shares"))}</td>
+          <td class="num">{_money(h.get("pps_cost"))}</td>
+          <td class="num">{price_cell}</td>
+          <td class="num">{value_cell}</td>
+          <td class="num {_gl_class(v["gl"])}">{_money(v["gl"])}</td>
+          <td class="txn">{txn}</td>
+          <td class="rm">
+            <form method="post" onsubmit="return confirm('Remove this holding?')">
+              <input type="hidden" name="action" value="remove">
+              <input type="hidden" name="holding_id" value="{html.escape(h.get("holding_id",""))}">
+              <button type="submit" title="Remove">&times;</button>
+            </form>
+          </td>
+        </tr>"""
+
+    if not holdings:
+        rows = """
+        <tr><td colspan="8" class="empty">No holdings yet. Add one below to see it valued.</td></tr>"""
+
+    total_gl = (tot_current - tot_cost) if (have_any_value and tot_cost) else None
+    totals = ""
+    if have_any_value:
+        totals = f"""
+        <tr class="totals">
+          <td>Portfolio</td><td></td><td></td><td></td>
+          <td class="num">{_money(tot_current)}</td>
+          <td class="num {_gl_class(total_gl)}">{_money(total_gl)}</td>
+          <td></td><td></td>
+        </tr>"""
+
+    indirect_note = ""
+    if have_indirect:
+        indirect_note = """
+        <p class="note">* Fund/SPV and Forward positions are shown at the
+        underlying company's per-share mark. Fund-level fees and carry are not
+        reflected, so the figure overstates the position's net value.</p>"""
+
+    options = "".join(
+        f'<option value="{cid}">{html.escape(p["name"])}</option>'
+        for cid, p in PRICES.items()
+    )
+    structure_opts = "".join(f'<option>{s}</option>' for s in STRUCTURES)
+
+    body = f"""
+    <h1>Your portfolio</h1>
+    <p class="subtitle">Indicative valuations against the latest market-price estimate.</p>
+
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Company</th><th class="num">Shares</th><th class="num">Cost / sh</th>
+          <th class="num">Market Price&#42;</th><th class="num">Value</th>
+          <th class="num">Gain / Loss</th><th>Txn date</th><th></th>
+        </tr>
+      </thead>
+      <tbody>{rows}{totals}</tbody>
+    </table>
+    </div>
+    {indirect_note}
+
+    <p class="disclaimer">&#42; Market Price is an indicative third-party estimate,
+    not a Rainmaker Securities valuation, and reflects the as-of date shown. Figures
+    are for tracking only and are not an offer, a quote, or investment advice.</p>
+
+    <div class="add">
+      <h2>Add a holding</h2>
+      <form method="post" class="addform">
+        <input type="hidden" name="action" value="add">
+        <div class="grid">
+          <div class="field">
+            <label>Company</label>
+            <select name="company_id" required>
+              <option value="" disabled selected>Select…</option>
+              {options}
+            </select>
+          </div>
+          <div class="field">
+            <label>Structure</label>
+            <select name="structure">{structure_opts}</select>
+          </div>
+          <div class="field">
+            <label>Shares</label>
+            <input type="number" name="shares" step="any" min="0" placeholder="e.g. 1500">
+          </div>
+          <div class="field">
+            <label>Cost per share (Gross)</label>
+            <input type="number" name="pps_cost" step="any" min="0" placeholder="e.g. 37.86">
+          </div>
+          <div class="field">
+            <label>Transaction date <span class="opt">(optional)</span></label>
+            <input type="date" name="transaction_date">
+          </div>
+        </div>
+        <button type="submit" class="btn-primary">Add holding</button>
+      </form>
+    </div>"""
+    return html_response(body)
+
+
+# ── HTML shell ───────────────────────────────────────────────────────────────────
+def html_response(body_html, status=200):
+    return {
+        "statusCode": status,
+        "headers": {"Content-Type": "text/html; charset=utf-8"},
+        "body": f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gracia Group — Portfolio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap" rel="stylesheet">
+  <style>
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    :root {{
+      --ink: #16181d; --muted: #6b7280; --line: #e7e5e0;
+      --bg: #f4f2ee; --card: #ffffff; --accent: #1a1a1a;
+      --pos: #1f7a4d; --neg: #b23b3b;
+    }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: var(--ink);
+      min-height: 100vh; padding: 40px 24px;
+      font-variant-numeric: tabular-nums;
+    }}
+    .card {{
+      background: var(--card); border: 1px solid var(--line);
+      border-radius: 14px; box-shadow: 0 1px 24px rgba(20,24,29,0.05);
+      padding: 40px; max-width: 940px; margin: 0 auto;
+    }}
+    .logo {{
+      font-size: 12px; font-weight: 600; letter-spacing: 0.14em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 24px;
+    }}
+    h1 {{ font-family: 'Fraunces', Georgia, serif; font-size: 30px; font-weight: 600; letter-spacing: -0.01em; }}
+    h2 {{ font-family: 'Fraunces', Georgia, serif; font-size: 19px; font-weight: 600; margin-bottom: 16px; }}
+    .subtitle {{ font-size: 14px; color: var(--muted); margin: 6px 0 26px; }}
+    .table-wrap {{ overflow-x: auto; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
+    th {{
+      text-align: left; font-size: 11px; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.06em;
+      padding: 0 14px 10px; border-bottom: 1px solid var(--line);
+    }}
+    td {{ padding: 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }}
+    .num {{ text-align: right; white-space: nowrap; }}
+    .co {{ font-weight: 600; }}
+    .struct {{
+      display: inline-block; margin-left: 8px; font-weight: 500; font-size: 11px;
+      color: var(--muted); background: var(--bg); padding: 2px 8px; border-radius: 6px;
+    }}
+    .asof {{ display: block; font-size: 11px; color: var(--muted); font-weight: 400; }}
+    .flag {{ color: var(--muted); }}
+    .pos {{ color: var(--pos); }}
+    .neg {{ color: var(--neg); }}
+    .txn {{ color: var(--muted); font-size: 13px; }}
+    .empty {{ text-align: center; color: var(--muted); padding: 40px 14px; }}
+    .totals td {{ font-weight: 700; border-top: 2px solid var(--ink); border-bottom: none; padding-top: 16px; }}
+    .rm form {{ margin: 0; }}
+    .rm button {{
+      background: none; border: none; color: #c9c5bd; font-size: 20px;
+      cursor: pointer; line-height: 1; padding: 0 4px;
+    }}
+    .rm button:hover {{ color: var(--neg); }}
+    .note {{ font-size: 12px; color: var(--muted); margin-top: 14px; font-style: italic; }}
+    .disclaimer {{
+      font-size: 12px; color: var(--muted); line-height: 1.5;
+      margin: 24px 0 0; padding: 14px 16px; background: var(--bg); border-radius: 10px;
+    }}
+    .add {{ margin-top: 40px; padding-top: 32px; border-top: 1px solid var(--line); }}
+    .grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px 20px; margin-bottom: 22px; }}
+    .field label {{ display: block; font-size: 13px; font-weight: 600; color: #444; margin-bottom: 6px; }}
+    .opt {{ font-weight: 400; color: var(--muted); }}
+    input, select {{
+      width: 100%; padding: 10px 14px; border: 1px solid var(--line);
+      border-radius: 9px; font-size: 15px; background: #fff; color: var(--ink);
+      transition: border-color 0.15s; font-family: inherit;
+    }}
+    input:focus, select:focus {{ outline: none; border-color: var(--accent); }}
+    .btn-primary {{
+      background: var(--accent); color: #fff; border: none; padding: 13px 28px;
+      border-radius: 9px; font-size: 15px; font-weight: 600; cursor: pointer; width: auto;
+    }}
+    .btn-primary:hover {{ opacity: 0.9; }}
+    @media (max-width: 600px) {{ .grid {{ grid-template-columns: 1fr; }} .card {{ padding: 24px; }} }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">Gracia Group</div>
+    {body_html}
+  </div>
+</body>
+</html>"""
+    }
+
+
+# ── Auth: magic link + signed session cookie ─────────────────────────────────────
+def _b64u(b):                       # bytes -> unpadded base64url str
+    return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+
+def _b64u_decode(s):                # unpadded base64url str -> bytes
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def make_token(client_id):
+    """Permanent magic-link token: HMAC over the client_id."""
+    sig = hmac.new(HMAC_SECRET.encode(), client_id.encode(), hashlib.sha256).digest()
+    return _b64u(sig)
+
+
+def verify_token(client_id, token):
+    return hmac.compare_digest(make_token(client_id), token or "")
+
+
+def make_session(client_id):
+    """Signed, expiring session value:  base64url(client_id|exp).base64url(sig)."""
+    payload = f"{client_id}|{int(time.time()) + SESSION_DAYS * 86400}"
+    p = _b64u(payload.encode())
+    sig = hmac.new(HMAC_SECRET.encode(), p.encode(), hashlib.sha256).digest()
+    return f"{p}.{_b64u(sig)}"
+
+
+def read_session(value):
+    """Return client_id if the cookie is validly signed and unexpired, else None."""
+    try:
+        p, s = (value or "").split(".", 1)
+        expected = hmac.new(HMAC_SECRET.encode(), p.encode(), hashlib.sha256).digest()
+        if not hmac.compare_digest(_b64u(expected), s):
+            return None
+        client_id, exp = _b64u_decode(p).decode().split("|", 1)
+        if int(exp) < int(time.time()):
+            return None
+        return client_id
+    except Exception:
+        return None
+
+
+def get_cookie(event, name):
+    for c in (event.get("cookies") or []):          # Function URL 2.0 payload
+        if c.startswith(name + "="):
+            return c[len(name) + 1:]
+    hdr = (event.get("headers") or {}).get("cookie", "")
+    for part in hdr.split(";"):
+        part = part.strip()
+        if part.startswith(name + "="):
+            return part[len(name) + 1:]
+    return None
+
+
+def login_required(msg):
+    return f"""
+    <h1>Portfolio access</h1>
+    <p class="subtitle">{html.escape(msg)}</p>
+    <p class="disclaimer">Open the personal link sent to you. If your link has
+    expired, contact Chad at cgracia@rainmakersecurities.com for a new one.</p>"""
+
+
+# ── Routing ──────────────────────────────────────────────────────────────────────
+def _parse_body(event):
+    body = event.get("body") or ""
+    if event.get("isBase64Encoded"):
+        body = base64.b64decode(body).decode("utf-8")
+    return {k: v[0] for k, v in urllib.parse.parse_qs(body).items()}
+
+
+def lambda_handler(event, context):
+    method = (event.get("requestContext", {}).get("http", {}).get("method") or "GET").upper()
+    raw_path = event.get("rawPath", "/")
+    qs = event.get("queryStringParameters") or {}
+
+    # 1) Magic-link arrival: verify, set session cookie, redirect to a clean URL.
+    if qs.get("client") and qs.get("token"):
+        if verify_token(qs["client"], qs["token"]):
+            cookie = (f"{COOKIE_NAME}={make_session(qs['client'])}; Path=/; HttpOnly; "
+                      f"Secure; SameSite=Lax; Max-Age={SESSION_DAYS * 86400}")
+            return {"statusCode": 303,
+                    "headers": {"Location": raw_path, "Set-Cookie": cookie}, "body": ""}
+        return html_response(login_required("That link isn't valid."), 403)
+
+    # 2) Everything else requires a valid session; scope strictly to that client.
+    client_id = read_session(get_cookie(event, COOKIE_NAME))
+    if not client_id:
+        return html_response(login_required("Please open your personal portfolio link."), 401)
+
+    if method == "POST":
+        form = _parse_body(event)
+        portfolio = load_portfolio(client_id)
+        if form.get("action") == "remove":
+            remove_holding(portfolio, form.get("holding_id", ""))
+        else:
+            add_holding(portfolio, form)
+        save_portfolio(portfolio)
+        # Post/Redirect/Get so a refresh doesn't resubmit the form.
+        return {"statusCode": 303, "headers": {"Location": raw_path}, "body": ""}
+
+    return render_portfolio(load_portfolio(client_id))
+
+
+# ── Local helper: mint a client's magic link ──────────────────────────────────────
+# Usage:  python portfolio_lambda.py <client_id> <base_url>
+# HMAC_SECRET must match production (export it before running).
+if __name__ == "__main__":
+    import sys
+    cid = sys.argv[1] if len(sys.argv) > 1 else "demo"
+    base = sys.argv[2] if len(sys.argv) > 2 else "https://YOUR-FUNCTION-URL"
+    print(f"{base.rstrip('/')}/?client={urllib.parse.quote(cid)}&token={make_token(cid)}")
