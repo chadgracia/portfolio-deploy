@@ -58,13 +58,13 @@ INDIRECT_STRUCTURES = {"Fund/SPV", "Forward"}
 
 
 # ── Company master list (Pipeline CRM mirror in S3) ──────────────────────────────
-# The tracked universe = Pipeline companies of Org. Type Unicorn or Private Company,
+# The tracked universe = Pipeline companies of Org. Type "Traded Issuer" (id 5103523),
 # read live from the shared CRM snapshot. Pipeline company_id is the join key; names
 # are display-only. Cached for the life of the warm Lambda instance (read once).
 COMPANIES_BUCKET  = "full-pipeline-cache"
 COMPANIES_KEY     = "companies.json"
 ORG_TYPE_FIELD    = "custom_label_625142"
-KEEP_ORG_TYPE_IDS = {5103523, 6677589}        # Unicorn, Private Company
+KEEP_ORG_TYPE_IDS = {5103523}        # Traded Issuer (id 5103523); Private Company intentionally excluded
 
 _companies_cache = None   # {company_id(str): name}, set on first use
 
