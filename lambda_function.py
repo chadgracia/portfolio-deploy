@@ -14,9 +14,9 @@ PROTOTYPE SCOPE / KNOWN LIMITS — read before this touches a real client:
   - The magic link is permanent per client (HMAC over client_id). If you want
     links that expire, add an expiry into the token; the session cookie already
     expires after SESSION_DAYS.
-  - PRICES below are PLACEHOLDER marks. Swap in real {company_id: price} pairs.
-    Later this gets replaced by reading the persisted price feed off
-    companies.json instead of being hardcoded here.
+  - Market Price comes from the Hiive Price field on each Pipeline company, read
+    out of companies.json by company_id (see company_prices()). Holdings whose
+    company has no Hiive Price yet render "—".
   - Storage is one JSON object per client in S3, whole-object read-modify-write.
     Fine for a handful of clients; revisit if concurrency or volume grows.
 """
@@ -41,15 +41,12 @@ HMAC_SECRET  = os.environ.get("HMAC_SECRET", "change-me-in-env")  # set in Lambd
 COOKIE_NAME  = "gg_session"
 SESSION_DAYS = 30
 
-# ── PLACEHOLDER pricing (price source only) ──────────────────────────────────────
-# Still placeholder marks — real Market Prices come in a later step, keyed by the
-# same Pipeline company_id used below. Real company_ids won't be in here yet, so the
-# Market Price / Value / Gain columns simply render "—" until prices are wired.
-PRICES = {
-    "9000001": {"name": "Example Company A", "hiive_price": 100.00, "as_of": "2026-05-08"},
-    "9000002": {"name": "Example Company B", "hiive_price":  42.50, "as_of": "2026-05-08"},
-    "9000003": {"name": "Example Company C", "hiive_price":  18.75, "as_of": "2026-05-08"},
-}
+# ── Market Price source (Hiive Price from the CRM snapshot) ──────────────────────
+# Real marks come from the persisted Hiive Price field on each Pipeline company, read
+# out of companies.json by company_id. Holdings whose company has no Hiive Price yet
+# render "—" in the Market Price / Value / Gain columns.
+FIELD_HIIVE_PRICE      = "custom_label_3999575"
+FIELD_HIIVE_PRICE_DATE = "custom_label_3999576"
 
 # Exact CRM Structure values (custom_label_3064360)
 STRUCTURES = ["Direct", "Fund/SPV", "Forward", "Unknown", "None"]
@@ -102,6 +99,47 @@ def tracked_companies():
         out[str(cid)] = name
     _companies_cache = dict(sorted(out.items(), key=lambda kv: kv[1].lower()))
     return _companies_cache
+
+
+_prices_cache = None   # {company_id(str): {"hiive_price": float|None, "as_of": str|None}}
+
+
+def _price_float(v):
+    if v in (None, "", 0, "0"):
+        return None
+    try:
+        if isinstance(v, str):
+            v = v.replace("$", "").replace(",", "").strip()
+            if not v:
+                return None
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def company_prices():
+    """{company_id(str): {"hiive_price": float|None, "as_of": str|None}} read from the
+    CRM snapshot's Hiive Price field. Cached on the warm instance; companies with no
+    Hiive Price are omitted (their holdings render "—")."""
+    global _prices_cache
+    if _prices_cache is not None:
+        return _prices_cache
+    s3 = boto3.client("s3")
+    obj = s3.get_object(Bucket=COMPANIES_BUCKET, Key=COMPANIES_KEY)
+    data = json.loads(obj["Body"].read())
+    out = {}
+    for rec in data.get("companies", []):
+        cid = rec.get("id")
+        if cid is None:
+            continue
+        custom = rec.get("custom_fields", {}) or {}
+        price = _price_float(custom.get(FIELD_HIIVE_PRICE))
+        if price is None:
+            continue
+        out[str(cid)] = {"hiive_price": price,
+                         "as_of": custom.get(FIELD_HIIVE_PRICE_DATE) or None}
+    _prices_cache = out
+    return _prices_cache
 
 
 def picker_index():
@@ -200,7 +238,7 @@ def update_holding(portfolio, holding_id, form):
 
 # ── Valuation (computed at read time, never stored) ──────────────────────────────
 def value_holding(h):
-    info = PRICES.get(h.get("company_id"))
+    info = company_prices().get(h.get("company_id"))
     hp = info["hiive_price"] if info else None
     shares, pps = h.get("shares"), h.get("pps_cost")
     current = shares * hp if (shares is not None and hp is not None) else None
