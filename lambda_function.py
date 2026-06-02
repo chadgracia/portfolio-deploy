@@ -7,8 +7,8 @@ market-price estimate, and persists newly-entered holdings to S3.
 AUTH: magic-link + signed session cookie (HMAC, same pattern as deal_update_form).
 A client opens /?client=<id>&token=<hmac> once; that sets a 30-day signed
 session cookie, and every read/write is scoped to the client the cookie proves.
-Generate a client's link locally:  python portfolio_lambda.py <client_id> <base_url>
-(the HMAC_SECRET env var must match production).
+Generate a client's link locally:  python lambda_function.py <person_id> <display_name> <base_url>
+(client_id is an opaque Pipeline person_id; the HMAC_SECRET env var must match production).
 
 PROTOTYPE SCOPE / KNOWN LIMITS — read before this touches a real client:
   - The magic link is permanent per client (HMAC over client_id). If you want
@@ -163,6 +163,7 @@ def _gl_class(v):
 # ── Render ───────────────────────────────────────────────────────────────────────
 def render_portfolio(portfolio):
     holdings = portfolio.get("holdings", [])
+    title = portfolio.get("display_name") or "Your portfolio"
     rows = ""
     tot_current = tot_cost = 0.0
     have_any_value = False
@@ -238,7 +239,7 @@ def render_portfolio(portfolio):
     structure_opts = "".join(f'<option>{s}</option>' for s in STRUCTURES)
 
     body = f"""
-    <h1>Your portfolio</h1>
+    <h1>{html.escape(title)}</h1>
     <p class="subtitle">Indicative valuations against the latest market-price estimate.</p>
 
     <div class="table-wrap">
@@ -495,11 +496,27 @@ def lambda_handler(event, context):
     return render_portfolio(load_portfolio(client_id))
 
 
-# ── Local helper: mint a client's magic link ──────────────────────────────────────
-# Usage:  python portfolio_lambda.py <client_id> <base_url>
+# ── Local helper: seed a client's portfolio + mint their magic link ────────────────
+# Usage:  python lambda_function.py <person_id> <display_name> <base_url>
+# <person_id> is the opaque Pipeline person_id used as the client key.
+# Seeds portfolios/<person_id>.json with an empty portfolio ONLY if it doesn't
+# already exist, so re-minting a link never overwrites real holdings.
 # HMAC_SECRET must match production (export it before running).
 if __name__ == "__main__":
     import sys
-    cid = sys.argv[1] if len(sys.argv) > 1 else "demo"
-    base = sys.argv[2] if len(sys.argv) > 2 else "https://YOUR-FUNCTION-URL"
+    if len(sys.argv) < 4:
+        print("usage: python lambda_function.py <person_id> <display_name> <base_url>")
+        sys.exit(1)
+    cid, display_name, base = sys.argv[1], sys.argv[2], sys.argv[3]
+
+    # Seed an empty portfolio only if one doesn't already exist.
+    s3 = boto3.client("s3")
+    try:
+        s3.head_object(Bucket=BUCKET, Key=_key(cid))
+    except ClientError as e:
+        if e.response["Error"]["Code"] in ("NoSuchKey", "NotFound", "404"):
+            save_portfolio({"client_id": cid, "display_name": display_name, "holdings": []})
+        else:
+            raise
+
     print(f"{base.rstrip('/')}/?client={urllib.parse.quote(cid)}&token={make_token(cid)}")
