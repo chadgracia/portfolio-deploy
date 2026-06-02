@@ -41,10 +41,10 @@ HMAC_SECRET  = os.environ.get("HMAC_SECRET", "change-me-in-env")  # set in Lambd
 COOKIE_NAME  = "gg_session"
 SESSION_DAYS = 30
 
-# ── PLACEHOLDER pricing + company list ──────────────────────────────────────────
-# Replace with real Company IDs and Hiive Prices. This dict doubles as the
-# company picker: a client can only select a company we have a price for, which
-# guarantees we have a company_id to value against.
+# ── PLACEHOLDER pricing (price source only) ──────────────────────────────────────
+# Still placeholder marks — real Market Prices come in a later step, keyed by the
+# same Pipeline company_id used below. Real company_ids won't be in here yet, so the
+# Market Price / Value / Gain columns simply render "—" until prices are wired.
 PRICES = {
     "9000001": {"name": "Example Company A", "hiive_price": 100.00, "as_of": "2026-05-08"},
     "9000002": {"name": "Example Company B", "hiive_price":  42.50, "as_of": "2026-05-08"},
@@ -55,6 +55,66 @@ PRICES = {
 STRUCTURES = ["Direct", "Fund/SPV", "Forward", "Unknown", "None"]
 # Structures where shares x underlying mark is NOT a clean position value
 INDIRECT_STRUCTURES = {"Fund/SPV", "Forward"}
+
+
+# ── Company master list (Pipeline CRM mirror in S3) ──────────────────────────────
+# The tracked universe = Pipeline companies of Org. Type Unicorn or Private Company,
+# read live from the shared CRM snapshot. Pipeline company_id is the join key; names
+# are display-only. Cached for the life of the warm Lambda instance (read once).
+COMPANIES_BUCKET  = "full-pipeline-cache"
+COMPANIES_KEY     = "companies.json"
+ORG_TYPE_FIELD    = "custom_label_625142"
+KEEP_ORG_TYPE_IDS = {5103523, 6677589}        # Unicorn, Private Company
+
+_companies_cache = None   # {company_id(str): name}, set on first use
+
+
+def _org_type_ids(rec):
+    v = rec.get("custom_fields", {}).get(ORG_TYPE_FIELD)
+    if v is None:
+        return set()
+    vals = v if isinstance(v, list) else [v]
+    out = set()
+    for x in vals:
+        try:
+            out.add(int(x))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def tracked_companies():
+    """{company_id(str): name} for Unicorn + Private Company orgs, sorted by name.
+    Read once from the CRM snapshot, then cached on the warm instance."""
+    global _companies_cache
+    if _companies_cache is not None:
+        return _companies_cache
+    s3 = boto3.client("s3")
+    obj = s3.get_object(Bucket=COMPANIES_BUCKET, Key=COMPANIES_KEY)
+    data = json.loads(obj["Body"].read())
+    out = {}
+    for rec in data.get("companies", []):
+        if not (_org_type_ids(rec) & KEEP_ORG_TYPE_IDS):
+            continue
+        cid, name = rec.get("id"), (rec.get("name") or "").strip()
+        if cid is None or not name:
+            continue
+        out[str(cid)] = name
+    _companies_cache = dict(sorted(out.items(), key=lambda kv: kv[1].lower()))
+    return _companies_cache
+
+
+def picker_index():
+    """{display_label: company_id}. Duplicate names get a ' #id' suffix so the name
+    the datalist submits always resolves to exactly one company."""
+    companies = tracked_companies()
+    counts = {}
+    for n in companies.values():
+        counts[n] = counts.get(n, 0) + 1
+    idx = {}
+    for cid, name in companies.items():
+        idx[name if counts[name] == 1 else f"{name} #{cid}"] = cid
+    return idx
 
 
 # ── Storage (S3, one object per client) ─────────────────────────────────────────
@@ -96,9 +156,11 @@ def _to_float(v):
 
 
 def add_holding(portfolio, form):
-    company_id = (form.get("company_id") or "").strip()
-    if company_id not in PRICES:
-        return  # unknown company; the picker should prevent this
+    # The datalist submits the company NAME; resolve it back to the Pipeline id.
+    name_in = (form.get("company") or "").strip()
+    company_id = picker_index().get(name_in)
+    if not company_id:
+        return  # not a recognized company; the picker should prevent this
     structure = form.get("structure", "None")
     if structure not in STRUCTURES:
         structure = "None"
@@ -107,7 +169,7 @@ def add_holding(portfolio, form):
     portfolio["holdings"].append({
         "holding_id": "hld_" + uuid.uuid4().hex[:8],
         "company_id": company_id,
-        "company_name": PRICES[company_id]["name"],
+        "company_name": tracked_companies()[company_id],
         "shares": _to_float(form.get("shares")),
         "pps_cost": _to_float(form.get("pps_cost")),   # Gross PPS the client paid
         "structure": structure,
@@ -233,8 +295,8 @@ def render_portfolio(portfolio):
         reflected, so the figure overstates the position's net value.</p>"""
 
     options = "".join(
-        f'<option value="{cid}">{html.escape(p["name"])}</option>'
-        for cid, p in PRICES.items()
+        f'<option value="{html.escape(label)}"></option>'
+        for label in picker_index()
     )
     structure_opts = "".join(f'<option>{s}</option>' for s in STRUCTURES)
 
@@ -267,10 +329,9 @@ def render_portfolio(portfolio):
         <div class="grid">
           <div class="field">
             <label>Company</label>
-            <select name="company_id" required>
-              <option value="" disabled selected>Select…</option>
-              {options}
-            </select>
+            <input name="company" list="company-list" required autocomplete="off"
+                   placeholder="Start typing a company…">
+            <datalist id="company-list">{options}</datalist>
           </div>
           <div class="field">
             <label>Structure</label>
