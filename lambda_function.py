@@ -185,6 +185,19 @@ def remove_holding(portfolio, holding_id):
     ]
 
 
+def update_holding(portfolio, holding_id, form):
+    # Partial update: only the field(s) present in the form are changed.
+    for h in portfolio["holdings"]:
+        if h.get("holding_id") != holding_id:
+            continue
+        if "shares" in form:
+            h["shares"] = _to_float(form.get("shares"))
+        if "pps_cost" in form:
+            h["pps_cost"] = _to_float(form.get("pps_cost"))
+        h["updated_at"] = datetime.now(timezone.utc).isoformat()
+        break
+
+
 # ── Valuation (computed at read time, never stored) ──────────────────────────────
 def value_holding(h):
     info = PRICES.get(h.get("company_id"))
@@ -222,6 +235,62 @@ def _gl_class(v):
     return "pos" if v >= 0 else "neg"
 
 
+def _raw(v):
+    if v is None:
+        return ""
+    f = float(v)
+    return str(int(f)) if f.is_integer() else str(f)
+
+
+def _edit_cell(holding_id, field, value, display):
+    return (
+        '<td class="num"><span class="editable" '
+        f'data-holding-id="{html.escape(holding_id)}" '
+        f'data-field="{field}" data-value="{html.escape(_raw(value))}">{display}</span></td>'
+    )
+
+
+# ── Inline-edit script (click a Shares or Cost cell; Enter saves, Esc cancels) ─────
+EDIT_SCRIPT = """<script>
+(function () {
+  document.querySelectorAll('.editable').forEach(function (cell) {
+    cell.addEventListener('click', function () {
+      if (cell.querySelector('input')) return;
+      var orig = cell.textContent;
+      var raw = cell.getAttribute('data-value') || '';
+      var input = document.createElement('input');
+      input.type = 'number'; input.step = 'any'; input.min = '0';
+      input.value = raw; input.className = 'cell-edit';
+      cell.textContent = ''; cell.appendChild(input);
+      input.focus(); input.select();
+      var done = false;
+      function commit(save) {
+        if (done) return;
+        done = true;
+        if (!save || input.value.trim() === raw.trim()) { cell.textContent = orig; return; }
+        var form = document.createElement('form');
+        form.method = 'post';
+        function hidden(name, value) {
+          var i = document.createElement('input');
+          i.type = 'hidden'; i.name = name; i.value = value;
+          form.appendChild(i);
+        }
+        hidden('action', 'update');
+        hidden('holding_id', cell.getAttribute('data-holding-id'));
+        hidden(cell.getAttribute('data-field'), input.value);
+        document.body.appendChild(form); form.submit();
+      }
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+        else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+      });
+      input.addEventListener('blur', function () { commit(true); });
+    });
+  });
+})();
+</script>"""
+
+
 # ── Render ───────────────────────────────────────────────────────────────────────
 def render_portfolio(portfolio):
     holdings = portfolio.get("holdings", [])
@@ -257,8 +326,8 @@ def render_portfolio(portfolio):
         <tr>
           <td class="co">{html.escape(h.get("company_name", ""))}
               <span class="struct">{html.escape(h.get("structure", ""))}</span></td>
-          <td class="num">{_shares(h.get("shares"))}</td>
-          <td class="num">{_money(h.get("pps_cost"))}</td>
+          {_edit_cell(h.get("holding_id", ""), "shares", h.get("shares"), _shares(h.get("shares")))}
+          {_edit_cell(h.get("holding_id", ""), "pps_cost", h.get("pps_cost"), _money(h.get("pps_cost")))}
           <td class="num">{price_cell}</td>
           <td class="num">{value_cell}</td>
           <td class="num {_gl_class(v["gl"])}">{_money(v["gl"])}</td>
@@ -353,7 +422,7 @@ def render_portfolio(portfolio):
         <button type="submit" class="btn-primary">Add holding</button>
       </form>
     </div>"""
-    return html_response(body)
+    return html_response(body + EDIT_SCRIPT)
 
 
 # ── HTML shell ───────────────────────────────────────────────────────────────────
@@ -442,6 +511,9 @@ def html_response(body_html, status=200):
     }}
     .btn-primary:hover {{ opacity: 0.9; }}
     @media (max-width: 600px) {{ .grid {{ grid-template-columns: 1fr; }} .card {{ padding: 24px; }} }}
+    .editable {{ cursor: pointer; border-bottom: 1px dashed transparent; }}
+    .editable:hover {{ border-bottom-color: var(--muted); }}
+    .cell-edit {{ width: 78px; padding: 3px 6px; font-size: 14px; text-align: right; }}
   </style>
 </head>
 <body>
@@ -546,8 +618,11 @@ def lambda_handler(event, context):
     if method == "POST":
         form = _parse_body(event)
         portfolio = load_portfolio(client_id)
-        if form.get("action") == "remove":
+        action = form.get("action")
+        if action == "remove":
             remove_holding(portfolio, form.get("holding_id", ""))
+        elif action == "update":
+            update_holding(portfolio, form.get("holding_id", ""), form)
         else:
             add_holding(portfolio, form)
         save_portfolio(portfolio)
