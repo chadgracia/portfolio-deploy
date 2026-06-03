@@ -295,9 +295,15 @@ def _raw(v):
     return str(int(f)) if f.is_integer() else str(f)
 
 
-def _edit_cell(holding_id, field, value, display):
+def _hover_cell(display, title, cls="num"):
+    t = f' title="{html.escape(title)}"' if title else ""
+    return f'<td class="{cls}"{t}>{display}</td>'
+
+
+def _edit_cell(holding_id, field, value, display, title=None):
+    t = f' title="{html.escape(title)}"' if title else ""
     return (
-        '<td class="num"><span class="editable" '
+        f'<td class="num"{t}><span class="editable" '
         f'data-holding-id="{html.escape(holding_id)}" '
         f'data-field="{field}" data-value="{html.escape(_raw(value))}">{display}</span></td>'
     )
@@ -365,31 +371,25 @@ def render_portfolio(portfolio):
         if indirect_mark:
             have_indirect = True
 
-        lr_cell = _money(v["last_round"])
-        if v["last_round_as_of"]:
-            lr_cell += f'<span class="asof">{html.escape(v["last_round_as_of"])}</span>'
-
-        price_cell = _money(v["hiive_price"])
-        if v["as_of"]:
-            price_cell += f'<span class="asof">{html.escape(v["as_of"])}</span>'
+        lr_title = f'As of {v["last_round_as_of"]}' if v["last_round_as_of"] else None
+        price_title = f'As of {v["as_of"]}' if v["as_of"] else None
 
         value_cell = _money(v["current"])
         if indirect_mark:
             value_cell += '<span class="flag">*</span>'
 
-        txn = html.escape(h.get("transaction_date") or "—")
+        cost_title = f'Txn date: {h.get("transaction_date") or "—"}'
 
         rows += f"""
         <tr>
           <td class="co">{html.escape(h.get("company_name", ""))}
               <span class="struct">{html.escape(h.get("structure", ""))}</span></td>
           {_edit_cell(h.get("holding_id", ""), "shares", h.get("shares"), _shares(h.get("shares")))}
-          {_edit_cell(h.get("holding_id", ""), "pps_cost", h.get("pps_cost"), _money(h.get("pps_cost")))}
-          <td class="num">{lr_cell}</td>
-          <td class="num">{price_cell}</td>
+          {_edit_cell(h.get("holding_id", ""), "pps_cost", h.get("pps_cost"), _money(h.get("pps_cost")), title=cost_title)}
+          {_hover_cell(_money(v["last_round"]), lr_title)}
+          {_hover_cell(_money(v["hiive_price"]), price_title)}
           <td class="num">{value_cell}</td>
           <td class="num {_gl_class(v["gl"])}">{_money(v["gl"])}</td>
-          <td class="txn">{txn}</td>
           <td class="rm">
             <form method="post" onsubmit="return confirm('Remove this holding?')">
               <input type="hidden" name="action" value="remove">
@@ -401,7 +401,7 @@ def render_portfolio(portfolio):
 
     if not holdings:
         rows = """
-        <tr><td colspan="9" class="empty">No holdings yet. Add one below to see it valued.</td></tr>"""
+        <tr><td colspan="8" class="empty">No holdings yet. Add one below to see it valued.</td></tr>"""
 
     total_gl = (tot_current - tot_cost) if (have_any_value and tot_cost) else None
     totals = ""
@@ -411,7 +411,7 @@ def render_portfolio(portfolio):
           <td>Portfolio</td><td></td><td></td><td></td><td></td>
           <td class="num">{_money(tot_current)}</td>
           <td class="num {_gl_class(total_gl)}">{_money(total_gl)}</td>
-          <td></td><td></td>
+          <td></td>
         </tr>"""
 
     indirect_note = ""
@@ -437,7 +437,7 @@ def render_portfolio(portfolio):
         <tr>
           <th>Company</th><th class="num">Shares</th><th class="num">Cost / sh</th>
           <th class="num">LR</th><th class="num">Market Price&#42;</th><th class="num">Value</th>
-          <th class="num">Gain / Loss</th><th>Txn date</th><th></th>
+          <th class="num">Gain / Loss</th><th></th>
         </tr>
       </thead>
       <tbody>{rows}{totals}</tbody>
@@ -446,7 +446,7 @@ def render_portfolio(portfolio):
     {indirect_note}
 
     <p class="disclaimer">&#42; Market Price is an indicative third-party estimate,
-    not a Rainmaker Securities valuation, and reflects the as-of date shown. Figures
+    not a Rainmaker Securities valuation, and reflects the as-of date shown on hover. Figures
     are for tracking only and are not an offer, a quote, or investment advice.</p>
 
     <div class="add">
@@ -535,11 +535,9 @@ def html_response(body_html, status=200):
       display: inline-block; margin-left: 8px; font-weight: 500; font-size: 11px;
       color: var(--muted); background: var(--bg); padding: 2px 8px; border-radius: 6px;
     }}
-    .asof {{ display: block; font-size: 11px; color: var(--muted); font-weight: 400; }}
     .flag {{ color: var(--muted); }}
     .pos {{ color: var(--pos); }}
     .neg {{ color: var(--neg); }}
-    .txn {{ color: var(--muted); font-size: 13px; }}
     .empty {{ text-align: center; color: var(--muted); padding: 40px 14px; }}
     .totals td {{ font-weight: 700; border-top: 2px solid var(--ink); border-bottom: none; padding-top: 16px; }}
     .rm form {{ margin: 0; }}
