@@ -48,6 +48,14 @@ SESSION_DAYS = 30
 FIELD_HIIVE_PRICE      = "custom_label_3999575"
 FIELD_HIIVE_PRICE_DATE = "custom_label_3999576"
 
+# ── Last Round (LR) source ────────────────────────────────────────────────────────
+# The "$LR" currency field on each Pipeline company (last primary-round price/sh),
+# read out of companies.json by company_id. No "$LR date" field exists in the CRM, so
+# LR renders price-only; set FIELD_LAST_ROUND_DATE to a custom_label_* id to add an
+# as-of date subtext (it will render automatically once present).
+FIELD_LAST_ROUND      = "custom_label_3064363"
+FIELD_LAST_ROUND_DATE = None
+
 # Exact CRM Structure values (custom_label_3064360)
 STRUCTURES = ["Direct", "Fund/SPV", "Forward", "Unknown", "None"]
 # Structures where shares x underlying mark is NOT a clean position value
@@ -118,9 +126,10 @@ def _price_float(v):
 
 
 def company_prices():
-    """{company_id(str): {"hiive_price": float|None, "as_of": str|None}} read from the
-    CRM snapshot's Hiive Price field. Cached on the warm instance; companies with no
-    Hiive Price are omitted (their holdings render "—")."""
+    """{company_id(str): {"hiive_price", "as_of", "last_round", "last_round_as_of"}}
+    read from the CRM snapshot's Hiive Price and $LR fields. Cached on the warm
+    instance; a company is included if it has either a Hiive Price or an LR price
+    (holdings with neither render "—")."""
     global _prices_cache
     if _prices_cache is not None:
         return _prices_cache
@@ -134,10 +143,16 @@ def company_prices():
             continue
         custom = rec.get("custom_fields", {}) or {}
         price = _price_float(custom.get(FIELD_HIIVE_PRICE))
-        if price is None:
+        last_round = _price_float(custom.get(FIELD_LAST_ROUND))
+        if price is None and last_round is None:
             continue
-        out[str(cid)] = {"hiive_price": price,
-                         "as_of": custom.get(FIELD_HIIVE_PRICE_DATE) or None}
+        out[str(cid)] = {
+            "hiive_price": price,
+            "as_of": custom.get(FIELD_HIIVE_PRICE_DATE) or None,
+            "last_round": last_round,
+            "last_round_as_of": (custom.get(FIELD_LAST_ROUND_DATE) or None)
+                                 if FIELD_LAST_ROUND_DATE else None,
+        }
     _prices_cache = out
     return _prices_cache
 
@@ -247,6 +262,8 @@ def value_holding(h):
     return {
         "hiive_price": hp,
         "as_of": info["as_of"] if info else None,
+        "last_round": info["last_round"] if info else None,
+        "last_round_as_of": info["last_round_as_of"] if info else None,
         "current": current,
         "cost": cost,
         "gl": gl,
@@ -350,6 +367,10 @@ def render_portfolio(portfolio):
         if indirect_mark:
             have_indirect = True
 
+        lr_cell = _money(v["last_round"])
+        if v["last_round_as_of"]:
+            lr_cell += f'<span class="asof">{html.escape(v["last_round_as_of"])}</span>'
+
         price_cell = _money(v["hiive_price"])
         if v["as_of"]:
             price_cell += f'<span class="asof">{html.escape(v["as_of"])}</span>'
@@ -366,6 +387,7 @@ def render_portfolio(portfolio):
               <span class="struct">{html.escape(h.get("structure", ""))}</span></td>
           {_edit_cell(h.get("holding_id", ""), "shares", h.get("shares"), _shares(h.get("shares")))}
           {_edit_cell(h.get("holding_id", ""), "pps_cost", h.get("pps_cost"), _money(h.get("pps_cost")))}
+          <td class="num">{lr_cell}</td>
           <td class="num">{price_cell}</td>
           <td class="num">{value_cell}</td>
           <td class="num {_gl_class(v["gl"])}">{_money(v["gl"])}</td>
@@ -381,14 +403,14 @@ def render_portfolio(portfolio):
 
     if not holdings:
         rows = """
-        <tr><td colspan="8" class="empty">No holdings yet. Add one below to see it valued.</td></tr>"""
+        <tr><td colspan="9" class="empty">No holdings yet. Add one below to see it valued.</td></tr>"""
 
     total_gl = (tot_current - tot_cost) if (have_any_value and tot_cost) else None
     totals = ""
     if have_any_value:
         totals = f"""
         <tr class="totals">
-          <td>Portfolio</td><td></td><td></td><td></td>
+          <td>Portfolio</td><td></td><td></td><td></td><td></td>
           <td class="num">{_money(tot_current)}</td>
           <td class="num {_gl_class(total_gl)}">{_money(total_gl)}</td>
           <td></td><td></td>
@@ -416,7 +438,7 @@ def render_portfolio(portfolio):
       <thead>
         <tr>
           <th>Company</th><th class="num">Shares</th><th class="num">Cost / sh</th>
-          <th class="num">Market Price&#42;</th><th class="num">Value</th>
+          <th class="num">LR</th><th class="num">Market Price&#42;</th><th class="num">Value</th>
           <th class="num">Gain / Loss</th><th>Txn date</th><th></th>
         </tr>
       </thead>
