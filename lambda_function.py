@@ -50,11 +50,9 @@ FIELD_HIIVE_PRICE_DATE = "custom_label_3999576"
 
 # ── Last Round (LR) source ────────────────────────────────────────────────────────
 # The "$LR" currency field on each Pipeline company (last primary-round price/sh),
-# read out of companies.json by company_id. No "$LR date" field exists in the CRM, so
-# LR renders price-only; set FIELD_LAST_ROUND_DATE to a custom_label_* id to add an
-# as-of date subtext (it will render automatically once present).
-FIELD_LAST_ROUND      = "custom_label_3064363"
-FIELD_LAST_ROUND_DATE = None
+# read out of companies.json by company_id, with the "LR Date" field as its as-of date.
+FIELD_LAST_ROUND      = "custom_label_3064363"   # $LR
+FIELD_LAST_ROUND_DATE = "custom_label_3826032"   # LR Date
 
 # Exact CRM Structure values (custom_label_3064360)
 STRUCTURES = ["Direct", "Fund/SPV", "Forward", "Unknown", "None"]
