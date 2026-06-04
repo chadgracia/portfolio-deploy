@@ -54,6 +54,9 @@ FIELD_HIIVE_PRICE_DATE = "custom_label_3999576"
 FIELD_LAST_ROUND      = "custom_label_3064363"   # $LR
 FIELD_LAST_ROUND_DATE = "custom_label_3826032"   # LR Date
 
+# ── Catalyst source (one-line catalyst written by the valuation-scanner) ──
+FIELD_CATALYST        = "custom_label_3999603"   # Catalyst
+
 # Exact CRM Structure values (custom_label_3064360)
 STRUCTURES = ["Direct", "Fund/SPV", "Forward", "Unknown", "None"]
 # Structures where shares x underlying mark is NOT a clean position value
@@ -153,6 +156,31 @@ def company_prices():
         }
     _prices_cache = out
     return _prices_cache
+
+
+_catalysts_cache = None   # {company_id(str): catalyst_text}, set on first use
+
+
+def company_catalysts():
+    """{company_id(str): catalyst_text} read from the CRM snapshot's Catalyst
+    field. Cached on the warm instance. Companies with no catalyst are omitted."""
+    global _catalysts_cache
+    if _catalysts_cache is not None:
+        return _catalysts_cache
+    s3 = boto3.client("s3")
+    obj = s3.get_object(Bucket=COMPANIES_BUCKET, Key=COMPANIES_KEY)
+    data = json.loads(obj["Body"].read())
+    out = {}
+    for rec in data.get("companies", []):
+        cid = rec.get("id")
+        if cid is None:
+            continue
+        custom = rec.get("custom_fields", {}) or {}
+        text = (custom.get(FIELD_CATALYST) or "").strip()
+        if text:
+            out[str(cid)] = text
+    _catalysts_cache = out
+    return _catalysts_cache
 
 
 def picker_index():
@@ -380,6 +408,10 @@ def render_portfolio(portfolio):
 
         cost_title = f'Txn date: {h.get("transaction_date") or "—"}'
 
+        cat = company_catalysts().get(str(h.get("company_id", "")))
+        cat_cell = (f'<td class="catalyst has-cat">{html.escape(cat)}</td>'
+                    if cat else '<td class="catalyst empty-cat">—</td>')
+
         rows += f"""
         <tr>
           <td class="co">{html.escape(h.get("company_name", ""))}
@@ -390,6 +422,7 @@ def render_portfolio(portfolio):
           {_hover_cell(_money(v["hiive_price"]), price_title)}
           <td class="num">{value_cell}</td>
           <td class="num {_gl_class(v["gl"])}">{_money(v["gl"])}</td>
+          {cat_cell}
           <td class="rm">
             <form method="post" onsubmit="return confirm('Remove this holding?')">
               <input type="hidden" name="action" value="remove">
@@ -401,7 +434,7 @@ def render_portfolio(portfolio):
 
     if not holdings:
         rows = """
-        <tr><td colspan="8" class="empty">No holdings yet. Add one below to see it valued.</td></tr>"""
+        <tr><td colspan="9" class="empty">No holdings yet. Add one below to see it valued.</td></tr>"""
 
     total_gl = (tot_current - tot_cost) if (have_any_value and tot_cost) else None
     totals = ""
@@ -411,6 +444,7 @@ def render_portfolio(portfolio):
           <td>Portfolio</td><td></td><td></td><td></td><td></td>
           <td class="num">{_money(tot_current)}</td>
           <td class="num {_gl_class(total_gl)}">{_money(total_gl)}</td>
+          <td></td>
           <td></td>
         </tr>"""
 
@@ -437,7 +471,7 @@ def render_portfolio(portfolio):
         <tr>
           <th>Company</th><th class="num">Shares</th><th class="num">Cost / sh</th>
           <th class="num">LR</th><th class="num">Market Price&#42;</th><th class="num">Value</th>
-          <th class="num">Gain / Loss</th><th></th>
+          <th class="num">Gain / Loss</th><th class="catalyst">Catalyst</th><th></th>
         </tr>
       </thead>
       <tbody>{rows}{totals}</tbody>
@@ -538,6 +572,12 @@ def html_response(body_html, status=200):
     .flag {{ color: var(--muted); }}
     .pos {{ color: var(--pos); }}
     .neg {{ color: var(--neg); }}
+    th.catalyst {{ text-align: left; }}
+    td.catalyst {{ max-width: 240px; white-space: normal; line-height: 1.4; font-size: 13px; }}
+    td.catalyst.has-cat {{
+      background: #eef6f0; color: #1f5138; font-weight: 600; border-left: 2px solid var(--pos);
+    }}
+    td.catalyst.empty-cat {{ color: var(--muted); text-align: center; }}
     .empty {{ text-align: center; color: var(--muted); padding: 40px 14px; }}
     .totals td {{ font-weight: 700; border-top: 2px solid var(--ink); border-bottom: none; padding-top: 16px; }}
     .rm form {{ margin: 0; }}
