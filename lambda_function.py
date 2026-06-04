@@ -560,6 +560,12 @@ EDIT_SCRIPT = """<script>
   var sendBtn = document.getElementById('inv-send');
   var msgEl = document.getElementById('inv-msg');
   var firstName = '';
+  var invitedAt = null;
+  function fmtDate(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    return isNaN(d) ? iso : d.toLocaleString();
+  }
   function post(data) {
     var body = Object.keys(data).map(function (k) {
       return encodeURIComponent(k) + '=' + encodeURIComponent(data[k]);
@@ -585,6 +591,15 @@ EDIT_SCRIPT = """<script>
           firstName = '';
           nameEl.textContent = 'No match in the directory \\u2014 enter their email manually.';
         }
+        invitedAt = d.invited_at || null;
+        if (invitedAt) {
+          msgEl.style.color = 'var(--neg)';
+          msgEl.textContent = '\\u26a0 Already invited ' + fmtDate(invitedAt)
+            + (d.invited_email ? ' (' + d.invited_email + ')' : '');
+        } else {
+          msgEl.style.color = '';
+          msgEl.textContent = '';
+        }
       })
       .catch(function () { nameEl.textContent = 'Lookup failed \\u2014 enter the email manually.'; });
   });
@@ -593,15 +608,27 @@ EDIT_SCRIPT = """<script>
     var email = (emailEl.value || '').trim();
     if (!tid) { idEl.focus(); return; }
     if (!email) { emailEl.focus(); return; }
+    // Warn-and-allow: a prior invite just requires an explicit confirm, never blocks.
+    if (invitedAt && !confirm('Already invited ' + fmtDate(invitedAt) + '. Resend?')) return;
     sendBtn.disabled = true;
+    sendBtn.textContent = 'Sending\\u2026';
+    msgEl.style.color = '';
     msgEl.textContent = '';
     post({ action: 'invite_send', target_id: tid, email: email, first_name: firstName })
       .then(function (r) {
         if (!r.ok) throw 0;
+        invitedAt = new Date().toISOString();   // reflect the resend within this session
+        msgEl.style.color = '';
         msgEl.textContent = 'Invite sent \\u2713';
       })
-      .catch(function () { msgEl.textContent = 'Could not send \\u2014 try again.'; })
-      .then(function () { sendBtn.disabled = false; });
+      .catch(function () {
+        msgEl.style.color = 'var(--neg)';
+        msgEl.textContent = 'Could not send \\u2014 try again.';
+      })
+      .then(function () {
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'Send invite';
+      });
   });
 })();
 </script>"""
@@ -1065,15 +1092,27 @@ def lambda_handler(event, context):
             if not is_admin:
                 return {"statusCode": 403, "headers": {"Content-Type": "application/json"},
                         "body": json.dumps({"ok": False, "error": "forbidden"})}
+            target_id = form.get("target_id", "")
+            result = lookup_person(target_id)
+            # Surface prior-invite status so the panel can warn before a resend.
+            prior = load_portfolio(target_id)
+            result["invited_at"] = prior.get("invited_at")
+            result["invited_email"] = prior.get("invited_email")
             return {"statusCode": 200, "headers": {"Content-Type": "application/json"},
-                    "body": json.dumps(lookup_person(form.get("target_id", "")))}
+                    "body": json.dumps(result)}
         if action == "invite_send":
             if not is_admin:
                 return {"statusCode": 403, "headers": {"Content-Type": "application/json"},
                         "body": json.dumps({"ok": False, "error": "forbidden"})}
+            target_id = form.get("target_id", "")
+            email = form.get("email", "")
             base_url = "https://" + event["requestContext"]["domainName"]
-            send_invite(form.get("target_id", ""), form.get("email", ""),
-                        form.get("first_name", ""), base_url)
+            send_invite(target_id, email, form.get("first_name", ""), base_url)
+            # Stamp the client's portfolio so a later lookup can warn on resend.
+            invited = load_portfolio(target_id)
+            invited["invited_at"] = datetime.now(timezone.utc).isoformat()
+            invited["invited_email"] = email
+            save_portfolio(invited)
             return _json_ok()
         if action == "remove":
             remove_holding(portfolio, form.get("holding_id", ""))
