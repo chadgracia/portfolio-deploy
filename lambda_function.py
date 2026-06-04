@@ -41,6 +41,10 @@ HMAC_SECRET  = os.environ.get("HMAC_SECRET", "change-me-in-env")  # set in Lambd
 COOKIE_NAME  = "gg_session"
 SESSION_DAYS = 30
 
+# Where client action emails (Get Bids / Get Offers / Feature Request) are sent.
+CHAD_EMAIL = "cgracia@rainmakersecurities.com"
+SES_SENDER = "agent@agent.graciagroup.com"   # already a verified SES sender
+
 # ── Market Price source (Hiive Price from the CRM snapshot) ──────────────────────
 # Real marks come from the persisted Hiive Price field on each Pipeline company, read
 # out of companies.json by company_id. Holdings whose company has no Hiive Price yet
@@ -277,6 +281,55 @@ def update_holding(portfolio, holding_id, form):
         break
 
 
+# ── Client action emails (Get Bids / Get Offers / Feature Request) ───────────────
+def _notify_chad(subject, body):
+    try:
+        boto3.client("ses", region_name="us-east-1").send_email(
+            Source=SES_SENDER,
+            Destination={"ToAddresses": [CHAD_EMAIL]},
+            Message={"Subject": {"Data": subject}, "Body": {"Text": {"Data": body}}},
+        )
+    except Exception as e:
+        print(f"notify_chad failed: {e}")
+
+
+def notify_interest(portfolio, client_id, holding_id, action):
+    h = next((x for x in portfolio.get("holdings", []) if x.get("holding_id") == holding_id), None)
+    if not h:
+        return
+    who = portfolio.get("display_name") or f"client {client_id}"
+    label = "GET BIDS (client wants to sell)" if action == "get_bids" else "GET OFFERS (client wants to buy)"
+    verb = "Get Bids" if action == "get_bids" else "Get Offers"
+    body = (
+        "Automated portfolio request - follow up with the client directly.\n\n"
+        f"Client:      {who} ({client_id})\n"
+        f"Request:     {label}\n"
+        f"Company:     {h.get('company_name', '?')}\n"
+        f"Structure:   {h.get('structure', '')}\n"
+        f"Shares held: {h.get('shares')}\n"
+    )
+    _notify_chad(f"[Portfolio] {verb} - {who} - {h.get('company_name', '?')}", body)
+
+
+def notify_feature(portfolio, client_id, message):
+    message = (message or "").strip()
+    if not message:
+        return
+    who = portfolio.get("display_name") or f"client {client_id}"
+    body = (
+        "Automated feature request from the portfolio app.\n\n"
+        f"Client: {who} ({client_id})\n\n"
+        f"{message}\n"
+    )
+    _notify_chad(f"[Portfolio] Feature request - {who}", body)
+
+
+def _json_ok():
+    return {"statusCode": 200,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({"ok": True})}
+
+
 # ── Valuation (computed at read time, never stored) ──────────────────────────────
 def value_holding(h):
     info = company_prices().get(h.get("company_id"))
@@ -375,6 +428,56 @@ EDIT_SCRIPT = """<script>
     });
   });
 })();
+(function () {
+  function post(data) {
+    var body = Object.keys(data).map(function (k) {
+      return encodeURIComponent(k) + '=' + encodeURIComponent(data[k]);
+    }).join('&');
+    return fetch(window.location.pathname, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body
+    });
+  }
+  document.querySelectorAll('.act').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      if (btn.disabled) return;
+      btn.disabled = true;
+      post({ action: btn.getAttribute('data-act'), holding_id: btn.getAttribute('data-hid') })
+        .then(function (r) {
+          if (!r.ok) throw 0;
+          btn.textContent = 'Sent \\u2713';
+          btn.classList.add('done');
+        })
+        .catch(function () {
+          btn.disabled = false;
+          alert('Could not send - please try again, or email Chad directly.');
+        });
+    });
+  });
+  var send = document.getElementById('fr-send');
+  if (send) {
+    send.addEventListener('click', function () {
+      var ta = document.getElementById('fr-text');
+      var msg = document.getElementById('fr-msg');
+      var text = (ta.value || '').trim();
+      if (!text) { ta.focus(); return; }
+      send.disabled = true;
+      msg.textContent = '';
+      post({ action: 'feature_request', message: text })
+        .then(function (r) {
+          if (!r.ok) throw 0;
+          ta.value = '';
+          msg.textContent = 'Thanks - sent to Chad.';
+          setTimeout(function () { send.disabled = false; }, 600);
+        })
+        .catch(function () {
+          send.disabled = false;
+          msg.textContent = 'Could not send - try again.';
+        });
+    });
+  }
+})();
 </script>"""
 
 
@@ -423,11 +526,13 @@ def render_portfolio(portfolio):
           <td class="num">{value_cell}</td>
           <td class="num {_gl_class(v["gl"])}">{_money(v["gl"])}</td>
           {cat_cell}
-          <td class="rm">
-            <form method="post" onsubmit="return confirm('Remove this holding?')">
+          <td class="acts">
+            <button type="button" class="act" data-act="get_bids" data-hid="{html.escape(h.get("holding_id",""))}">Get Bids</button>
+            <button type="button" class="act" data-act="get_offers" data-hid="{html.escape(h.get("holding_id",""))}">Get Offers</button>
+            <form method="post" class="rmform" onsubmit="return confirm('Remove this holding?')">
               <input type="hidden" name="action" value="remove">
               <input type="hidden" name="holding_id" value="{html.escape(h.get("holding_id",""))}">
-              <button type="submit" title="Remove">&times;</button>
+              <button type="submit" class="x" title="Remove">&times;</button>
             </form>
           </td>
         </tr>"""
@@ -513,6 +618,13 @@ def render_portfolio(portfolio):
         </div>
         <button type="submit" class="btn-primary">Add holding</button>
       </form>
+    </div>
+
+    <div class="feedback">
+      <h2>Feature Request</h2>
+      <textarea id="fr-text" rows="3" placeholder="Let us know what would make this more useful for you."></textarea>
+      <div><button type="button" id="fr-send" class="btn-primary">Send</button>
+      <span id="fr-msg" class="fr-msg"></span></div>
     </div>"""
     return html_response(body + EDIT_SCRIPT)
 
@@ -574,7 +686,7 @@ def html_response(body_html, status=200):
     .card {{
       background: var(--card); border: 1px solid var(--line);
       border-radius: 14px; box-shadow: 0 1px 24px rgba(20,24,29,0.05);
-      padding: 40px; max-width: 940px; margin: 0 auto;
+      padding: 40px; max-width: 1120px; margin: 0 auto;
     }}
     .logo {{
       font-size: 12px; font-weight: 600; letter-spacing: 0.14em;
@@ -663,6 +775,25 @@ def html_response(body_html, status=200):
     .editable {{ display: inline-block; width: 100%; cursor: pointer; border-bottom: 1px dashed transparent; }}
     .editable:hover {{ border-bottom-color: var(--muted); }}
     .cell-edit {{ width: 78px; padding: 3px 6px; font-size: 14px; text-align: right; }}
+    td.acts {{ white-space: nowrap; text-align: right; }}
+    td.acts .act {{
+      display: block; width: 100%; margin: 0 0 4px; padding: 5px 8px;
+      font-size: 11px; font-weight: 600; border-radius: 6px; cursor: pointer;
+      border: 1px solid var(--line); background: #fff; color: var(--ink);
+      font-family: inherit; transition: border-color 0.15s, color 0.15s;
+    }}
+    td.acts .act:hover {{ border-color: var(--accent); color: var(--accent); }}
+    td.acts .act.done {{ color: var(--pos); border-color: var(--pos); cursor: default; }}
+    td.acts .rmform {{ margin: 4px 0 0; }}
+    td.acts .x {{ background: none; border: none; color: #c9c5bd; font-size: 18px; cursor: pointer; line-height: 1; padding: 0; }}
+    td.acts .x:hover {{ color: var(--neg); }}
+    .feedback {{ margin-top: 40px; padding-top: 32px; border-top: 1px solid var(--line); }}
+    .feedback textarea {{
+      width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px;
+      font-size: 15px; font-family: inherit; color: var(--ink); resize: vertical; margin-bottom: 14px;
+    }}
+    .feedback textarea:focus {{ outline: none; border-color: var(--accent); }}
+    .fr-msg {{ margin-left: 14px; font-size: 13px; color: var(--pos); font-weight: 600; }}
   </style>
 </head>
 <body>
@@ -770,6 +901,13 @@ def lambda_handler(event, context):
         form = _parse_body(event)
         portfolio = load_portfolio(client_id)
         action = form.get("action")
+        # Client action buttons + feedback: email Chad, return JSON (no reload).
+        if action in ("get_bids", "get_offers"):
+            notify_interest(portfolio, client_id, form.get("holding_id", ""), action)
+            return _json_ok()
+        if action == "feature_request":
+            notify_feature(portfolio, client_id, form.get("message", ""))
+            return _json_ok()
         if action == "remove":
             remove_holding(portfolio, form.get("holding_id", ""))
         elif action == "update":
