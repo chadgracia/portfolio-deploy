@@ -471,7 +471,7 @@ def render_portfolio(portfolio):
         <tr>
           <th>Company</th><th class="num">Shares</th><th class="num">Cost / sh</th>
           <th class="num">LR</th><th class="num">Market Price&#42;</th><th class="num">Value</th>
-          <th class="num">Gain / Loss</th><th class="catalyst">Catalyst</th><th></th>
+          <th class="num">Gain / Loss</th><th class="catalyst">Recent Developments</th><th></th>
         </tr>
       </thead>
       <tbody>{rows}{totals}</tbody>
@@ -614,7 +614,7 @@ def html_response(body_html, status=200):
 </head>
 <body>
   <div class="card">
-    <div class="logo">Gracia Group</div>
+    <div class="logo">Private Portfolio Snapshot &amp; Tracker</div>
     {body_html}
   </div>
 </body>
