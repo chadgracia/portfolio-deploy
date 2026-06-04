@@ -36,7 +36,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 # ── Config ────────────────────────────────────────────────────────────────────
-BUCKET       = "gracia-portfolios"                       # TODO: set to your bucket
+BUCKET       = "gracia-portfolios"                       # per-client portfolio storage
 HMAC_SECRET  = os.environ.get("HMAC_SECRET", "change-me-in-env")  # set in Lambda env
 COOKIE_NAME  = "gg_session"
 SESSION_DAYS = 30
