@@ -196,9 +196,9 @@ def lookup_person(client_id):
     feature. Returns {"found": True, "email", "first_name"} or {"found": False}.
     Person ids are ints in the file; client_id is a string, so compare as strings.
     Never raises — a missing file or unknown id just yields {"found": False}.
-    NOTE: people.json wasn't available to inspect, so email/name extraction is
-    defensive across the common Pipeline record shapes; verify against the real
-    file and tighten if the field names differ."""
+    Confirmed shape: data["people"], rec["id"], rec["email"], rec["first_name"]
+    (with full_name as the name fallback). The extra variant handling below is
+    kept as belt-and-suspenders."""
     try:
         s3 = boto3.client("s3")
         obj = s3.get_object(Bucket=COMPANIES_BUCKET, Key=PEOPLE_KEY)
