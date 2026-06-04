@@ -39,7 +39,10 @@ from botocore.exceptions import ClientError
 BUCKET       = "gracia-portfolios"                       # per-client portfolio storage
 HMAC_SECRET  = os.environ.get("HMAC_SECRET", "change-me-in-env")  # set in Lambda env
 COOKIE_NAME  = "gg_session"
-SESSION_DAYS = 30
+SESSION_DAYS = 365
+
+# Admin gate: the one client_id allowed to invite others. Set in the Lambda env.
+ADMIN_CLIENT_ID = os.environ.get("ADMIN_CLIENT_ID", "")
 
 # Where client action emails (Get Bids / Get Offers / Feature Request) are sent.
 CHAD_EMAIL = "cgracia@rainmakersecurities.com"
@@ -73,6 +76,7 @@ INDIRECT_STRUCTURES = {"Fund/SPV", "Forward"}
 # are display-only. Cached for the life of the warm Lambda instance (read once).
 COMPANIES_BUCKET  = "full-pipeline-cache"
 COMPANIES_KEY     = "companies.json"
+PEOPLE_KEY        = "people.json"        # CRM people snapshot, same bucket
 ORG_TYPE_FIELD    = "custom_label_625142"
 KEEP_ORG_TYPE_IDS = {5103523}        # Traded Issuer (id 5103523); Private Company intentionally excluded
 
@@ -185,6 +189,42 @@ def company_catalysts():
             out[str(cid)] = text
     _catalysts_cache = out
     return _catalysts_cache
+
+
+def lookup_person(client_id):
+    """Look up a person in the CRM snapshot (people.json) by id, for the invite
+    feature. Returns {"found": True, "email", "first_name"} or {"found": False}.
+    Person ids are ints in the file; client_id is a string, so compare as strings.
+    Never raises — a missing file or unknown id just yields {"found": False}.
+    NOTE: people.json wasn't available to inspect, so email/name extraction is
+    defensive across the common Pipeline record shapes; verify against the real
+    file and tighten if the field names differ."""
+    try:
+        s3 = boto3.client("s3")
+        obj = s3.get_object(Bucket=COMPANIES_BUCKET, Key=PEOPLE_KEY)
+        data = json.loads(obj["Body"].read())
+        records = data.get("people", []) if isinstance(data, dict) else (data or [])
+        target = str(client_id)
+        for rec in records:
+            if str(rec.get("id")) != target:
+                continue
+            # Email: explicit field, else first entry of an emails list.
+            email = rec.get("email") or rec.get("primary_email") or ""
+            if not email:
+                emails = rec.get("emails")
+                if isinstance(emails, list) and emails:
+                    first = emails[0]
+                    email = first if isinstance(first, str) else (
+                        (first or {}).get("address") or (first or {}).get("email") or "")
+            # First name: explicit field, else split a combined name field.
+            first_name = (rec.get("first_name") or "").strip()
+            if not first_name:
+                full = (rec.get("name") or rec.get("full_name") or "").strip()
+                first_name = full.split()[0] if full else ""
+            return {"found": True, "email": (email or "").strip(), "first_name": first_name}
+    except Exception as e:
+        print(f"lookup_person failed: {e}")
+    return {"found": False}
 
 
 def picker_index():
@@ -322,6 +362,39 @@ def notify_feature(portfolio, client_id, message):
         f"{message}\n"
     )
     _notify_chad(f"[Portfolio] Feature request - {who}", body)
+
+
+def _send_email(to_addr, subject, body):
+    try:
+        boto3.client("ses", region_name="us-east-1").send_email(
+            Source=SES_SENDER,
+            Destination={"ToAddresses": [to_addr]},
+            Message={"Subject": {"Data": subject}, "Body": {"Text": {"Data": body}}},
+        )
+    except Exception as e:
+        print(f"send_email failed: {e}")
+
+
+def send_invite(target_id, to_addr, first_name, base_url):
+    link = f"{base_url}/?client={target_id}&token={make_token(target_id)}"
+    first_name = (first_name or "").strip() or "there"
+    subject = "A portfolio tracker I thought you might find useful (beta)"
+    body = (
+        f"Hi {first_name},\n\n"
+        "I created a portfolio tracker for my personal pre-IPO holdings because I "
+        "wanted a way to get a sense of current valuations based on the bids we're "
+        "seeing, plus news that could move the price, all in one place. I thought I'd "
+        "share this beta with a few clients. You can add your own positions and it'll "
+        "track them the same way — if you find it useful, let me know!\n\n"
+        "Open yours here:\n"
+        f"{link}\n\n"
+        "The link is private to you, so please don't forward it. The figures are "
+        "indicative third-party estimates for tracking only — not an offer, a quote, "
+        "or a Rainmaker valuation.\n\n"
+        "Chad Gracia\n"
+        "Rainmaker Securities\n"
+    )
+    _send_email(to_addr, subject, body)
 
 
 def _json_ok():
@@ -478,13 +551,84 @@ EDIT_SCRIPT = """<script>
     });
   }
 })();
+(function () {
+  var lookupBtn = document.getElementById('inv-lookup');
+  if (!lookupBtn) return;   // panel only present for the admin session
+  var idEl = document.getElementById('inv-id');
+  var emailEl = document.getElementById('inv-email');
+  var nameEl = document.getElementById('inv-name');
+  var sendBtn = document.getElementById('inv-send');
+  var msgEl = document.getElementById('inv-msg');
+  var firstName = '';
+  function post(data) {
+    var body = Object.keys(data).map(function (k) {
+      return encodeURIComponent(k) + '=' + encodeURIComponent(data[k]);
+    }).join('&');
+    return fetch(window.location.pathname, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body
+    });
+  }
+  lookupBtn.addEventListener('click', function () {
+    var tid = (idEl.value || '').trim();
+    if (!tid) { idEl.focus(); return; }
+    msgEl.textContent = '';
+    post({ action: 'invite_lookup', target_id: tid })
+      .then(function (r) { if (!r.ok) throw 0; return r.json(); })
+      .then(function (d) {
+        if (d.found) {
+          firstName = d.first_name || '';
+          emailEl.value = d.email || '';
+          nameEl.textContent = (firstName || 'Match found') + ' \\u2014 confirm the email and send.';
+        } else {
+          firstName = '';
+          nameEl.textContent = 'No match in the directory \\u2014 enter their email manually.';
+        }
+      })
+      .catch(function () { nameEl.textContent = 'Lookup failed \\u2014 enter the email manually.'; });
+  });
+  sendBtn.addEventListener('click', function () {
+    var tid = (idEl.value || '').trim();
+    var email = (emailEl.value || '').trim();
+    if (!tid) { idEl.focus(); return; }
+    if (!email) { emailEl.focus(); return; }
+    sendBtn.disabled = true;
+    msgEl.textContent = '';
+    post({ action: 'invite_send', target_id: tid, email: email, first_name: firstName })
+      .then(function (r) {
+        if (!r.ok) throw 0;
+        msgEl.textContent = 'Invite sent \\u2713';
+      })
+      .catch(function () { msgEl.textContent = 'Could not send \\u2014 try again.'; })
+      .then(function () { sendBtn.disabled = false; });
+  });
+})();
 </script>"""
 
 
 # ── Render ───────────────────────────────────────────────────────────────────────
-def render_portfolio(portfolio):
+# Admin-only invite panel; rendered into the page solely for the admin session.
+INVITE_PANEL_HTML = """
+    <div class="feedback">
+      <h2>Invite a client</h2>
+      <div class="invrow">
+        <input id="inv-id" autocomplete="off" placeholder="Client ID (Pipeline person ID)">
+        <button type="button" id="inv-lookup" class="btn-primary">Look up</button>
+      </div>
+      <p id="inv-name" class="inv-name"></p>
+      <div class="invrow">
+        <input id="inv-email" type="email" autocomplete="off" placeholder="client@example.com">
+        <button type="button" id="inv-send" class="btn-primary">Send invite</button>
+      </div>
+      <span id="inv-msg" class="fr-msg"></span>
+    </div>"""
+
+
+def render_portfolio(portfolio, is_admin=False):
     holdings = portfolio.get("holdings", [])
     title = portfolio.get("display_name") or "Your portfolio"
+    invite_panel = INVITE_PANEL_HTML if is_admin else ""
     rows = ""
     tot_current = tot_cost = 0.0
     have_any_value = False
@@ -625,7 +769,8 @@ def render_portfolio(portfolio):
       <textarea id="fr-text" rows="3" placeholder="Let us know what would make this more useful for you."></textarea>
       <div><button type="button" id="fr-send" class="btn-primary">Send</button>
       <span id="fr-msg" class="fr-msg"></span></div>
-    </div>"""
+    </div>
+    {invite_panel}"""
     return html_response(body + EDIT_SCRIPT)
 
 
@@ -794,6 +939,9 @@ def html_response(body_html, status=200):
     }}
     .feedback textarea:focus {{ outline: none; border-color: var(--accent); }}
     .fr-msg {{ margin-left: 14px; font-size: 13px; color: var(--pos); font-weight: 600; }}
+    .invrow {{ display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }}
+    .invrow input {{ flex: 1; }}
+    .inv-name {{ font-size: 13px; color: var(--muted); margin: 0 0 12px; min-height: 1em; }}
   </style>
 </head>
 <body>
@@ -897,6 +1045,9 @@ def lambda_handler(event, context):
     if not client_id:
         return html_response(login_required("Please open your personal portfolio link."), 401)
 
+    # Server-side admin gate: only this client_id may mint invites to any portfolio.
+    is_admin = bool(ADMIN_CLIENT_ID) and client_id == ADMIN_CLIENT_ID
+
     if method == "POST":
         form = _parse_body(event)
         portfolio = load_portfolio(client_id)
@@ -908,6 +1059,22 @@ def lambda_handler(event, context):
         if action == "feature_request":
             notify_feature(portfolio, client_id, form.get("message", ""))
             return _json_ok()
+        # Admin-only invite endpoints. The gate is enforced here, not just in the UI:
+        # these can mint a link to any client's portfolio, so a non-admin gets 403.
+        if action == "invite_lookup":
+            if not is_admin:
+                return {"statusCode": 403, "headers": {"Content-Type": "application/json"},
+                        "body": json.dumps({"ok": False, "error": "forbidden"})}
+            return {"statusCode": 200, "headers": {"Content-Type": "application/json"},
+                    "body": json.dumps(lookup_person(form.get("target_id", "")))}
+        if action == "invite_send":
+            if not is_admin:
+                return {"statusCode": 403, "headers": {"Content-Type": "application/json"},
+                        "body": json.dumps({"ok": False, "error": "forbidden"})}
+            base_url = "https://" + event["requestContext"]["domainName"]
+            send_invite(form.get("target_id", ""), form.get("email", ""),
+                        form.get("first_name", ""), base_url)
+            return _json_ok()
         if action == "remove":
             remove_holding(portfolio, form.get("holding_id", ""))
         elif action == "update":
@@ -918,7 +1085,7 @@ def lambda_handler(event, context):
         # Post/Redirect/Get so a refresh doesn't resubmit the form.
         return {"statusCode": 303, "headers": {"Location": raw_path}, "body": ""}
 
-    return render_portfolio(load_portfolio(client_id))
+    return render_portfolio(load_portfolio(client_id), is_admin)
 
 
 # ── Local helper: seed a client's portfolio + mint their magic link ────────────────
