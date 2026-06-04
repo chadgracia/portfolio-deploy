@@ -518,6 +518,34 @@ def render_portfolio(portfolio):
 
 
 # ── HTML shell ───────────────────────────────────────────────────────────────────
+# Quiet top nav back to the main Gracia Group properties. Same-tab links; the
+# session cookie persists, so a client can leave and return without re-auth.
+TOPNAV_HTML = """
+    <nav class="topnav">
+      <div class="navgroup">
+        <a class="navbtn brand" href="https://www.graciagroup.com">Gracia Group</a>
+      </div>
+      <div class="navgroup">
+        <a class="navbtn" href="https://trades.graciagroup.com/">Indications</a>
+        <button class="navbtn navbtn-soon" type="button" disabled title="Coming soon">Download PDF</button>
+      </div>
+    </nav>"""
+
+# Firm legal disclosure, pinned to the very bottom of every page.
+DISCLOSURE_HTML = """
+    <footer class="legal">
+      <p class="lead">DISCLOSURE: Rainmaker Securities, LLC (“RMS”) is a FINRA registered broker-dealer and SIPC member. Find this broker-dealer and its agents on BrokerCheck. Our relationship summary can be found on the RMS website.</p>
+      <p>RMS is engaged by its clients to make referrals to buyers or sellers of private securities (“Securities”). If such client closes a Securities transaction with a buyer or seller so referred, RMS is entitled to a success fee from the client. Such success fee may be in the form of cash or in warrants to purchase securities of the client or client’s affiliate. RMS or RMS representatives may hold equity in its issuer clients or in the issuers of securities purchased or sold by the parties to a transaction.</p>
+      <p>This communication is confidential and is addressed only to its intended recipient. This communication does not represent an offer or solicitation to buy or sell Securities. Such an offer must be made via definitive legal documentation by the seller of securities.</p>
+      <p>Investments in the Securities are speculative and involve a high degree of risk. An investor in the Securities should have little to no need for liquidity in the foreseeable future and have sufficient finances to withstand the loss of the entire investment.</p>
+      <p>RMS does not recommend the purchase or sale of Securities. Potential buyers or sellers of the Securities should seek professional counsel prior to entering into any transaction.</p>
+      <h3>Risk Factors</h3>
+      <p>Investments in the Securities are speculative and involve a high degree of risk. Companies engaging in private placements may be early stage and high risk. You should be able to afford the increased risk of loss with such investments, including the potential of a total loss.</p>
+      <p>An investor in the Securities should have little to no need for liquidity in the foreseeable future. Unlike an investment purchased on a stock exchange, an investment in a private placement is highly illiquid. You will most likely be investing in restricted securities, may have difficulty finding a buyer for the securities when you can resell and, as a result, may need to hold the securities indefinitely.</p>
+      <p>Limited disclosure Information. Companies engaging in private placements are not required to provide the disclosure that would be required in a registered offering. You may have less information to make an informed investment decision than, for example, stock purchased on a stock exchange, including information that may help you determine whether the price asked for the investment is a fair price. Potential buyers or sellers of the Securities should seek professional counsel prior to entering into any transaction.</p>
+    </footer>"""
+
+
 def html_response(body_html, status=200):
     return {
         "statusCode": status,
@@ -552,6 +580,31 @@ def html_response(body_html, status=200):
       font-size: 12px; font-weight: 600; letter-spacing: 0.14em;
       text-transform: uppercase; color: var(--muted); margin-bottom: 24px;
     }}
+    .topnav {{
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 10px; flex-wrap: wrap; margin-bottom: 26px;
+    }}
+    .navgroup {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }}
+    .navbtn {{
+      font-size: 12px; font-weight: 600; letter-spacing: 0.03em; line-height: 1;
+      color: var(--muted); text-decoration: none; background: #fff;
+      padding: 8px 13px; border: 1px solid var(--line); border-radius: 8px;
+      transition: color 0.15s, border-color 0.15s;
+    }}
+    .navbtn:hover {{ color: var(--ink); border-color: var(--muted); }}
+    .navbtn.brand {{ color: var(--ink); }}
+    .navbtn-soon {{ color: #b6b2aa; border-style: dashed; cursor: not-allowed; }}
+    .navbtn-soon:hover {{ color: #b6b2aa; border-color: var(--line); }}
+    .legal {{
+      margin-top: 44px; padding-top: 28px; border-top: 1px solid var(--line);
+      font-size: 11px; line-height: 1.6; color: var(--muted);
+    }}
+    .legal .lead {{ font-weight: 600; color: #4b4f57; }}
+    .legal h3 {{
+      font-family: inherit; font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--ink); margin: 20px 0 8px;
+    }}
+    .legal p {{ margin: 0 0 10px; }}
     h1 {{ font-family: 'Fraunces', Georgia, serif; font-size: 30px; font-weight: 600; letter-spacing: -0.01em; }}
     h2 {{ font-family: 'Fraunces', Georgia, serif; font-size: 19px; font-weight: 600; margin-bottom: 16px; }}
     .subtitle {{ font-size: 14px; color: var(--muted); margin: 6px 0 26px; }}
@@ -614,8 +667,10 @@ def html_response(body_html, status=200):
 </head>
 <body>
   <div class="card">
+    {TOPNAV_HTML}
     <div class="logo">Private Portfolio Snapshot &amp; Tracker</div>
     {body_html}
+    {DISCLOSURE_HTML}
   </div>
 </body>
 </html>"""
