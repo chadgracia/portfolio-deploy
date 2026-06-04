@@ -567,7 +567,7 @@ def html_response(body_html, status=200):
     }}
     .btn-primary:hover {{ opacity: 0.9; }}
     @media (max-width: 600px) {{ .grid {{ grid-template-columns: 1fr; }} .card {{ padding: 24px; }} }}
-    .editable {{ cursor: pointer; border-bottom: 1px dashed transparent; }}
+    .editable {{ display: inline-block; width: 100%; cursor: pointer; border-bottom: 1px dashed transparent; }}
     .editable:hover {{ border-bottom-color: var(--muted); }}
     .cell-edit {{ width: 78px; padding: 3px 6px; font-size: 14px; text-align: right; }}
   </style>
