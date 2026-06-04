@@ -107,7 +107,7 @@ def tracked_companies():
     return _companies_cache
 
 
-_prices_cache = None   # {company_id(str): {"hiive_price": float|None, "as_of": str|None}}
+_prices_cache = None   # {company_id(str): {"hiive_price", "as_of", "last_round", "last_round_as_of"}}
 
 
 def _price_float(v):
