@@ -753,7 +753,7 @@ def render_portfolio(portfolio, is_admin=False):
     <table>
       <thead>
         <tr>
-          <th>Company</th><th class="num">Shares</th><th class="num">Cost / sh</th>
+          <th>Company</th><th class="num">Shares</th><th class="num">Cost Basis / sh</th>
           <th class="num">LR</th><th class="num">Market Price&#42;</th><th class="num">Value</th>
           <th class="num">Gain / Loss</th><th class="catalyst">Recent Developments</th><th></th>
         </tr>
@@ -788,7 +788,7 @@ def render_portfolio(portfolio, is_admin=False):
           </div>
           <div class="field">
             <label>Cost per share (Gross)</label>
-            <input type="number" name="pps_cost" step="any" min="0" placeholder="e.g. 37.86">
+            <input type="number" name="pps_cost" step="any" min="0" placeholder="Original purchase price">
           </div>
           <div class="field">
             <label>Transaction date <span class="opt">(optional)</span></label>
@@ -886,7 +886,7 @@ def _readonly_holdings_table(portfolio):
     <table>
       <thead>
         <tr>
-          <th>Company</th><th class="num">Shares</th><th class="num">Cost / sh</th>
+          <th>Company</th><th class="num">Shares</th><th class="num">Cost Basis / sh</th>
           <th class="num">LR</th><th class="num">Market Price&#42;</th><th class="num">Value</th>
           <th class="num">Gain / Loss</th><th class="catalyst">Recent Developments</th>
         </tr>
