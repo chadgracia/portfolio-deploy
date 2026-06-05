@@ -809,6 +809,150 @@ def render_portfolio(portfolio, is_admin=False):
     return html_response(body + EDIT_SCRIPT)
 
 
+# ── Admin read-only roll-up ───────────────────────────────────────────────────────
+# An admin-only view of EVERY client's portfolio. It deliberately renders plain,
+# valued rows with NO interactive controls: the add-holding form, the inline-edit
+# script, and the row action / remove buttons all POST scoped to the logged-in
+# (admin) session, so reusing them here would mis-write to the admin's OWN
+# portfolio. Read-only is the whole point.
+def _readonly_holdings_table(portfolio):
+    """The same valued table render_portfolio builds — same value_holding, _money,
+    _shares, gain/loss, catalysts, indirect-mark note — but with the editable cells
+    replaced by plain ones and the per-row action column dropped entirely (8 cols)."""
+    holdings = portfolio.get("holdings", [])
+    rows = ""
+    tot_current = tot_cost = 0.0
+    have_any_value = False
+    have_indirect = False
+
+    for h in holdings:
+        v = value_holding(h)
+        if v["current"] is not None:
+            tot_current += v["current"]
+            have_any_value = True
+        if v["cost"] is not None:
+            tot_cost += v["cost"]
+
+        indirect_mark = h.get("structure") in INDIRECT_STRUCTURES and v["current"] is not None
+        if indirect_mark:
+            have_indirect = True
+
+        lr_title = f'As of {v["last_round_as_of"]}' if v["last_round_as_of"] else None
+        price_title = f'As of {v["as_of"]}' if v["as_of"] else None
+
+        value_cell = _money(v["current"])
+        if indirect_mark:
+            value_cell += '<span class="flag">*</span>'
+
+        cost_title = f'Txn date: {h.get("transaction_date") or "—"}'
+
+        cat = company_catalysts().get(str(h.get("company_id", "")))
+        cat_cell = (f'<td class="catalyst has-cat">{html.escape(cat)}</td>'
+                    if cat else '<td class="catalyst empty-cat">—</td>')
+
+        rows += f"""
+        <tr>
+          <td class="co">{html.escape(h.get("company_name", ""))}
+              <span class="struct">{html.escape(h.get("structure", ""))}</span></td>
+          <td class="num">{_shares(h.get("shares"))}</td>
+          {_hover_cell(_money(h.get("pps_cost")), cost_title)}
+          {_hover_cell(_money(v["last_round"]), lr_title)}
+          {_hover_cell(_money(v["hiive_price"]), price_title)}
+          <td class="num">{value_cell}</td>
+          <td class="num {_gl_class(v["gl"])}">{_money(v["gl"])}</td>
+          {cat_cell}
+        </tr>"""
+
+    total_gl = (tot_current - tot_cost) if (have_any_value and tot_cost) else None
+    totals = ""
+    if have_any_value:
+        totals = f"""
+        <tr class="totals">
+          <td>Portfolio</td><td></td><td></td><td></td><td></td>
+          <td class="num">{_money(tot_current)}</td>
+          <td class="num {_gl_class(total_gl)}">{_money(total_gl)}</td>
+          <td></td>
+        </tr>"""
+
+    indirect_note = ""
+    if have_indirect:
+        indirect_note = """
+        <p class="note">* Fund/SPV and Forward positions are shown at the
+        underlying company's per-share mark. Fund-level fees and carry are not
+        reflected, so the figure overstates the position's net value.</p>"""
+
+    return f"""
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Company</th><th class="num">Shares</th><th class="num">Cost / sh</th>
+          <th class="num">LR</th><th class="num">Market Price&#42;</th><th class="num">Value</th>
+          <th class="num">Gain / Loss</th><th class="catalyst">Recent Developments</th>
+        </tr>
+      </thead>
+      <tbody>{rows}{totals}</tbody>
+    </table>
+    </div>
+    {indirect_note}"""
+
+
+def render_admin_overview(admin_id):
+    """Admin-only READ-ONLY roll-up of every client's portfolio. Lists all portfolio
+    objects under portfolios/ in BUCKET, derives each client_id from the key, loads
+    it with load_portfolio(), and renders a plain valued table per client (no forms,
+    no edit script, no action buttons — see _readonly_holdings_table). Each block is
+    headed by the client's name from _people_index()["by_id"] (first_name / email if
+    present, else the bare id); blocks are sorted by that name and an empty portfolio
+    shows "(no holdings yet)". admin_id isn't used for scoping — the admin sees
+    everyone — but is kept for symmetry with the call site."""
+    s3 = boto3.client("s3")
+    client_ids = []
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix="portfolios/"):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if key.endswith(".json"):
+                cid = key[len("portfolios/"):-len(".json")]
+                if cid:
+                    client_ids.append(cid)
+
+    try:
+        by_id = _people_index().get("by_id", {})
+    except Exception:
+        by_id = {}   # index missing/unreachable: fall back to bare ids, don't break the page
+
+    def _label(cid):
+        rec = by_id.get(str(cid))
+        if rec:
+            name = (rec.get("first_name") or "").strip()
+            email = (rec.get("email") or "").strip()
+            if name and email:
+                return f"{name} — {email}"
+            if name or email:
+                return name or email
+        return str(cid)
+
+    blocks = []
+    for cid in client_ids:
+        label = _label(cid)
+        portfolio = load_portfolio(cid)
+        inner = (_readonly_holdings_table(portfolio)
+                 if portfolio.get("holdings") else '<p class="empty">(no holdings yet)</p>')
+        blocks.append((label, f"""
+    <section class="client-block" style="margin-top:2.5rem">
+      <h2>{html.escape(label)}</h2>
+      {inner}
+    </section>"""))
+
+    blocks.sort(key=lambda b: b[0].lower())
+
+    body = f"""
+    <h1>All client portfolios</h1>
+    <p class="subtitle">Read-only roll-up across every client.</p>
+    {"".join(block for _, block in blocks)}"""
+    return html_response(body)
+
+
 # ── HTML shell ───────────────────────────────────────────────────────────────────
 # Quiet top nav back to the main Gracia Group properties. Same-tab links; the
 # session cookie persists, so a client can leave and return without re-auth.
@@ -1187,6 +1331,8 @@ def lambda_handler(event, context):
         # Post/Redirect/Get so a refresh doesn't resubmit the form.
         return {"statusCode": 303, "headers": {"Location": raw_path}, "body": ""}
 
+    if is_admin:
+        return render_admin_overview(client_id)
     return render_portfolio(load_portfolio(client_id), is_admin)
 
 
