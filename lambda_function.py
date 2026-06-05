@@ -33,6 +33,7 @@ import uuid
 from datetime import datetime, timezone
 
 import boto3
+from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -192,6 +193,26 @@ def company_catalysts():
     return _catalysts_cache
 
 
+_people_cache = None   # parsed people.json records (data["people"]), set on first use
+
+
+def _people_records():
+    """people.json records, read + parsed ONCE and cached on the warm instance.
+    The single source both lookup_person and lookup_person_id_by_email read, so the
+    two can't diverge. A short S3 connect/read timeout (and no retry storm) means a
+    stuck read fails fast instead of blocking to the Lambda function limit. May
+    raise on a read/parse error — callers are fail-closed."""
+    global _people_cache
+    if _people_cache is not None:
+        return _people_cache
+    cfg = BotoConfig(connect_timeout=5, read_timeout=5, retries={"max_attempts": 1})
+    s3 = boto3.client("s3", config=cfg)
+    obj = s3.get_object(Bucket=COMPANIES_BUCKET, Key=PEOPLE_KEY)
+    data = json.loads(obj["Body"].read())
+    _people_cache = data.get("people", []) if isinstance(data, dict) else (data or [])
+    return _people_cache
+
+
 def lookup_person(client_id):
     """Look up a person in the CRM snapshot (people.json) by id, for the invite
     feature. Returns {"found": True, "email", "first_name"} or {"found": False}.
@@ -201,10 +222,7 @@ def lookup_person(client_id):
     (with full_name as the name fallback). The extra variant handling below is
     kept as belt-and-suspenders."""
     try:
-        s3 = boto3.client("s3")
-        obj = s3.get_object(Bucket=COMPANIES_BUCKET, Key=PEOPLE_KEY)
-        data = json.loads(obj["Body"].read())
-        records = data.get("people", []) if isinstance(data, dict) else (data or [])
+        records = _people_records()
         target = str(client_id)
         for rec in records:
             if str(rec.get("id")) != target:
@@ -1034,11 +1052,7 @@ def lookup_person_id_by_email(email):
     if not target:
         return None
     try:
-        s3 = boto3.client("s3")
-        obj = s3.get_object(Bucket=COMPANIES_BUCKET, Key=PEOPLE_KEY)
-        data = json.loads(obj["Body"].read())
-        people = data.get("people", []) if isinstance(data, dict) else (data or [])
-        for p in people:
+        for p in _people_records():
             if (p.get("email") or "").strip().lower() == target:
                 return str(p.get("id"))
         return None
