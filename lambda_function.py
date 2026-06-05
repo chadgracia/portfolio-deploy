@@ -46,6 +46,9 @@ SESSION_DAYS = 365
 # Admin gate: the one client_id allowed to invite others. Set in the Lambda env.
 ADMIN_CLIENT_ID = os.environ.get("ADMIN_CLIENT_ID", "")
 
+# Pipeline (PD) person page; the admin roll-up links each Client ID here (new tab).
+PD_PERSON_URL = "https://app.pipelinecrm.com/people/"
+
 # Where client action emails (Get Bids / Get Offers / Feature Request) are sent.
 CHAD_EMAIL = "cgracia@rainmakersecurities.com"
 SES_SENDER = "agent@agent.graciagroup.com"   # already a verified SES sender
@@ -902,10 +905,11 @@ def render_admin_overview(admin_id):
     objects under portfolios/ in BUCKET, derives each client_id from the key, loads
     it with load_portfolio(), and renders a plain valued table per client (no forms,
     no edit script, no action buttons — see _readonly_holdings_table). Each block is
-    headed by the client's name from _people_index()["by_id"] (first_name / email if
-    present, else the bare id); blocks are sorted by that name and an empty portfolio
-    shows "(no holdings yet)". admin_id isn't used for scoping — the admin sees
-    everyone — but is kept for symmetry with the call site."""
+    headed by the client's full name (portfolio display_name, else the index
+    first_name, else "Client <id>") as a mailto link, followed by the Client ID
+    linking to that person's Pipeline page in a new tab. Blocks are sorted by name and
+    an empty portfolio shows "(no holdings yet)". admin_id isn't used for scoping —
+    the admin sees everyone — but is kept for symmetry with the call site."""
     s3 = boto3.client("s3")
     client_ids = []
     for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix="portfolios/"):
@@ -921,26 +925,27 @@ def render_admin_overview(admin_id):
     except Exception:
         by_id = {}   # index missing/unreachable: fall back to bare ids, don't break the page
 
-    def _label(cid):
-        rec = by_id.get(str(cid))
-        if rec:
-            name = (rec.get("first_name") or "").strip()
-            email = (rec.get("email") or "").strip()
-            if name and email:
-                return f"{name} — {email}"
-            if name or email:
-                return name or email
-        return str(cid)
-
     blocks = []
     for cid in client_ids:
-        label = _label(cid)
         portfolio = load_portfolio(cid)
+        rec = by_id.get(str(cid)) or {}
+        email = (rec.get("email") or "").strip()
+        # Full name from the portfolio's display_name (the index only carries
+        # first_name); fall back to first_name, then to a bare "Client <id>".
+        name = (portfolio.get("display_name") or rec.get("first_name") or "").strip() or f"Client {cid}"
+        # Clicking the name opens a pre-addressed email; the Client ID opens that
+        # person's main page in Pipeline in a new tab.
+        name_html = (f'<a href="mailto:{html.escape(email)}">{html.escape(name)}</a>'
+                     if email else html.escape(name))
+        pd_url = PD_PERSON_URL + urllib.parse.quote(str(cid))
+        id_html = (f'<a class="pd-id" href="{html.escape(pd_url)}" target="_blank" rel="noopener" '
+                   f'style="margin-left:.6rem;font-size:.8em;font-weight:400;opacity:.7">'
+                   f'Client ID {html.escape(str(cid))}</a>')
         inner = (_readonly_holdings_table(portfolio)
                  if portfolio.get("holdings") else '<p class="empty">(no holdings yet)</p>')
-        blocks.append((label, f"""
+        blocks.append((name, f"""
     <section class="client-block" style="margin-top:2.5rem">
-      <h2>{html.escape(label)}</h2>
+      <h2>{name_html}{id_html}</h2>
       {inner}
     </section>"""))
 
