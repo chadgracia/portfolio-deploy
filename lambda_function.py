@@ -38,6 +38,7 @@ from botocore.exceptions import ClientError
 # ── Config ────────────────────────────────────────────────────────────────────
 BUCKET       = "gracia-portfolios"                       # per-client portfolio storage
 HMAC_SECRET  = os.environ.get("HMAC_SECRET", "change-me-in-env")  # set in Lambda env
+IDENTITY_SECRET = os.environ.get("IDENTITY_SECRET", "")  # shared with trades-gracia-web; verifies the SSO handoff
 COOKIE_NAME  = "gg_session"
 SESSION_DAYS = 365
 
@@ -1002,6 +1003,49 @@ def verify_token(client_id, token):
     return hmac.compare_digest(make_token(client_id), token or "")
 
 
+def _verify_sso_handoff(token):
+    """Email if the trading site's signed, unexpired handoff verifies, else None.
+    Token is base64url(f"{email}|{exp}|{sig}"), sig = HMAC-SHA256(IDENTITY_SECRET,
+    f"{email}|{exp}").hexdigest(). Never raises."""
+    if not (IDENTITY_SECRET and token):
+        return None
+    try:
+        parts = _b64u_decode(token).decode().split("|")
+        if len(parts) != 3:
+            return None
+        email, exp, sig = parts
+        expected = hmac.new(IDENTITY_SECRET.encode(), f"{email}|{exp}".encode(),
+                            hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, sig):
+            return None
+        if int(exp) < int(time.time()):
+            return None
+        return email
+    except Exception:
+        return None
+
+
+def lookup_person_id_by_email(email):
+    """str(person_id) for the lead whose email matches (case-insensitive), else None.
+    Load people.json the SAME way lookup_person does (same bucket constant, same
+    json parse, same data["people"] list) — only the match and return differ here.
+    Never raises."""
+    target = (email or "").strip().lower()
+    if not target:
+        return None
+    try:
+        s3 = boto3.client("s3")
+        obj = s3.get_object(Bucket=COMPANIES_BUCKET, Key=PEOPLE_KEY)
+        data = json.loads(obj["Body"].read())
+        people = data.get("people", []) if isinstance(data, dict) else (data or [])
+        for p in people:
+            if (p.get("email") or "").strip().lower() == target:
+                return str(p.get("id"))
+        return None
+    except Exception:
+        return None
+
+
 def make_session(client_id):
     """Signed, expiring session value:  base64url(client_id|exp).base64url(sig)."""
     payload = f"{client_id}|{int(time.time()) + SESSION_DAYS * 86400}"
@@ -1066,6 +1110,25 @@ def lambda_handler(event, context):
             return {"statusCode": 303,
                     "headers": {"Location": raw_path, "Set-Cookie": cookie}, "body": ""}
         return html_response(login_required("That link isn't valid."), 403)
+
+    # 1b) Cross-site SSO handoff from the trading site: verify the signed email,
+    #     map it to a person_id, set the same session cookie. Falls through to a
+    #     friendly message when the email isn't in the CRM snapshot yet.
+    if qs.get("sso"):
+        email = _verify_sso_handoff(qs["sso"])
+        if not email:
+            return html_response(login_required(
+                "That portfolio link has expired — head back to the trading site "
+                "and click “Your Portfolio” again."), 403)
+        cid = lookup_person_id_by_email(email)
+        if not cid:
+            return html_response(login_required(
+                "We couldn't find a portfolio linked to your email yet — please "
+                "contact Chad and he'll get you set up."), 200)
+        cookie = (f"{COOKIE_NAME}={make_session(cid)}; Path=/; HttpOnly; "
+                  f"Secure; SameSite=Lax; Max-Age={SESSION_DAYS * 86400}")
+        return {"statusCode": 303,
+                "headers": {"Location": raw_path, "Set-Cookie": cookie}, "body": ""}
 
     # 2) Everything else requires a valid session; scope strictly to that client.
     client_id = read_session(get_cookie(event, COOKIE_NAME))
