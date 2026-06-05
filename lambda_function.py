@@ -949,8 +949,13 @@ def render_admin_overview(admin_id):
     body = f"""
     <h1>All client portfolios</h1>
     <p class="subtitle">Read-only roll-up across every client.</p>
+    {INVITE_PANEL_HTML}
     {"".join(block for _, block in blocks)}"""
-    return html_response(body)
+    # INVITE_PANEL_HTML is the admin invite tool (not a client table) placed above the
+    # roll-up. EDIT_SCRIPT carries its lookup/send wiring (the invite IIFE); its other
+    # IIFEs are inert here — there are no .editable cells or .act buttons to bind, so
+    # the client tables stay strictly read-only.
+    return html_response(body + EDIT_SCRIPT)
 
 
 # ── HTML shell ───────────────────────────────────────────────────────────────────
