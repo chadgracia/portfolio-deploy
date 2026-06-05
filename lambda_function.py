@@ -78,7 +78,8 @@ INDIRECT_STRUCTURES = {"Fund/SPV", "Forward"}
 # are display-only. Cached for the life of the warm Lambda instance (read once).
 COMPANIES_BUCKET  = "full-pipeline-cache"
 COMPANIES_KEY     = "companies.json"
-PEOPLE_KEY        = "people.json"        # CRM people snapshot, same bucket
+PEOPLE_KEY        = "people.json"        # 113 MB CRM people snapshot; source for the index below
+PEOPLE_INDEX_KEY  = "people_index.json"  # small email->id / id->{email,first_name} index (build_people_index.py)
 ORG_TYPE_FIELD    = "custom_label_625142"
 KEEP_ORG_TYPE_IDS = {5103523}        # Traded Issuer (id 5103523); Private Company intentionally excluded
 
@@ -193,54 +194,42 @@ def company_catalysts():
     return _catalysts_cache
 
 
-_people_cache = None   # parsed people.json records (data["people"]), set on first use
+_people_index_cache = None   # parsed people_index.json, set on first use
 
 
-def _people_records():
-    """people.json records, read + parsed ONCE and cached on the warm instance.
-    The single source both lookup_person and lookup_person_id_by_email read, so the
-    two can't diverge. A short S3 connect/read timeout (and no retry storm) means a
-    stuck read fails fast instead of blocking to the Lambda function limit. May
-    raise on a read/parse error — callers are fail-closed."""
-    global _people_cache
-    if _people_cache is not None:
-        return _people_cache
+def _people_index():
+    """The small people_index.json (built from the 113 MB people.json by the
+    upstream build_people_index.py), read + parsed ONCE and cached on the warm
+    instance. Shape:
+        {"by_id":    {id_str: {"email": ..., "first_name": ...}},
+         "by_email": {email_lower: id_str}}
+    The single source both lookups read, so they can't diverge. The full 113 MB
+    people.json is NEVER loaded here — that parse is what OOM'd / timed out the
+    function. A short S3 connect/read timeout (no retry storm) fails fast on a stuck
+    read. May raise on a read/parse error — callers are fail-closed."""
+    global _people_index_cache
+    if _people_index_cache is not None:
+        return _people_index_cache
     cfg = BotoConfig(connect_timeout=5, read_timeout=5, retries={"max_attempts": 1})
     s3 = boto3.client("s3", config=cfg)
-    obj = s3.get_object(Bucket=COMPANIES_BUCKET, Key=PEOPLE_KEY)
-    data = json.loads(obj["Body"].read())
-    _people_cache = data.get("people", []) if isinstance(data, dict) else (data or [])
-    return _people_cache
+    obj = s3.get_object(Bucket=COMPANIES_BUCKET, Key=PEOPLE_INDEX_KEY)
+    _people_index_cache = json.loads(obj["Body"].read())
+    return _people_index_cache
 
 
 def lookup_person(client_id):
-    """Look up a person in the CRM snapshot (people.json) by id, for the invite
-    feature. Returns {"found": True, "email", "first_name"} or {"found": False}.
-    Person ids are ints in the file; client_id is a string, so compare as strings.
-    Never raises — a missing file or unknown id just yields {"found": False}.
-    Confirmed shape: data["people"], rec["id"], rec["email"], rec["first_name"]
-    (with full_name as the name fallback). The extra variant handling below is
-    kept as belt-and-suspenders."""
+    """Look up a person by id via people_index.json, for the invite feature.
+    Returns {"found": True, "email", "first_name"} or {"found": False}. Ids are
+    strings in the index; client_id is a string. Never raises — a missing index or
+    unknown id just yields {"found": False}. (The index's by_id entries are already
+    normalized by build_people_index.py: clean email + first_name with full_name
+    fallback, so no variant handling is needed here.)"""
     try:
-        records = _people_records()
-        target = str(client_id)
-        for rec in records:
-            if str(rec.get("id")) != target:
-                continue
-            # Email: explicit field, else first entry of an emails list.
-            email = rec.get("email") or rec.get("primary_email") or ""
-            if not email:
-                emails = rec.get("emails")
-                if isinstance(emails, list) and emails:
-                    first = emails[0]
-                    email = first if isinstance(first, str) else (
-                        (first or {}).get("address") or (first or {}).get("email") or "")
-            # First name: explicit field, else split a combined name field.
-            first_name = (rec.get("first_name") or "").strip()
-            if not first_name:
-                full = (rec.get("name") or rec.get("full_name") or "").strip()
-                first_name = full.split()[0] if full else ""
-            return {"found": True, "email": (email or "").strip(), "first_name": first_name}
+        rec = _people_index().get("by_id", {}).get(str(client_id))
+        if rec:
+            return {"found": True,
+                    "email": (rec.get("email") or "").strip(),
+                    "first_name": (rec.get("first_name") or "").strip()}
     except Exception as e:
         print(f"lookup_person failed: {e}")
     return {"found": False}
@@ -1044,18 +1033,15 @@ def _verify_sso_handoff(token):
 
 
 def lookup_person_id_by_email(email):
-    """str(person_id) for the lead whose email matches (case-insensitive), else None.
-    Load people.json the SAME way lookup_person does (same bucket constant, same
-    json parse, same data["people"] list) — only the match and return differ here.
-    Never raises."""
+    """str(person_id) for the lead whose email matches (case-insensitive) via
+    people_index.json's by_email map, else None. Reads the same shared index as
+    lookup_person, so the two can't diverge. Never raises."""
     target = (email or "").strip().lower()
     if not target:
         return None
     try:
-        for p in _people_records():
-            if (p.get("email") or "").strip().lower() == target:
-                return str(p.get("id"))
-        return None
+        cid = _people_index().get("by_email", {}).get(target)
+        return str(cid) if cid is not None else None
     except Exception:
         return None
 
