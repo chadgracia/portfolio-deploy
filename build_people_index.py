@@ -12,7 +12,7 @@ Usage:
   python build_people_index.py in.json out.json    # local files, for testing
 
 Index shape (matches lambda_function.py's _people_index()):
-  {"by_id":    {id_str: {"email": ..., "first_name": ...}},
+  {"by_id":    {id_str: {"email": ..., "first_name": ..., "name": "First Last"}},
    "by_email": {email_lower: id_str}}
 """
 import json
@@ -45,6 +45,16 @@ def _first_name(rec):
     return first_name
 
 
+def _full_name(rec):
+    """Full "First Last" name, for display headings. Prefer an explicit full-name
+    field; else join first_name + last_name."""
+    full = (rec.get("full_name") or rec.get("name") or "").strip()
+    if not full:
+        full = " ".join(p for p in [(rec.get("first_name") or "").strip(),
+                                    (rec.get("last_name") or "").strip()] if p)
+    return full
+
+
 def build(data):
     """data (parsed people.json) -> the small index dict."""
     people = data.get("people", []) if isinstance(data, dict) else (data or [])
@@ -54,7 +64,7 @@ def build(data):
         if rid is None:
             continue
         email = _email(rec)
-        by_id[str(rid)] = {"email": email, "first_name": _first_name(rec)}
+        by_id[str(rid)] = {"email": email, "first_name": _first_name(rec), "name": _full_name(rec)}
         if email:
             by_email[email.lower()] = str(rid)   # last write wins on duplicate emails
     return {"by_id": by_id, "by_email": by_email}

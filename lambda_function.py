@@ -204,7 +204,7 @@ def _people_index():
     """The small people_index.json (built from the 113 MB people.json by the
     upstream build_people_index.py), read + parsed ONCE and cached on the warm
     instance. Shape:
-        {"by_id":    {id_str: {"email": ..., "first_name": ...}},
+        {"by_id":    {id_str: {"email": ..., "first_name": ..., "name": "First Last"}},
          "by_email": {email_lower: id_str}}
     The single source both lookups read, so they can't diverge. The full 113 MB
     people.json is NEVER loaded here — that parse is what OOM'd / timed out the
@@ -962,8 +962,8 @@ def render_admin_overview(admin_id):
     from the key, loads it with load_portfolio(), and renders an editable valued table
     plus an add-holding form per client (see _admin_holdings_table / _admin_add_form);
     every write carries that client's target_client_id. Each block is headed by the
-    client's full name (portfolio display_name, else the index first_name, else
-    "Client <id>") as a mailto link, followed by the Client ID linking to that
+    client's full name (index "name", else portfolio display_name, else first_name,
+    else "Client <id>") as a mailto link, followed by the Client ID linking to that
     person's Pipeline page in a new tab. Blocks are sorted by name. admin_id isn't
     used for scoping — the admin sees everyone — but is kept for symmetry with the
     call site."""
@@ -987,16 +987,21 @@ def render_admin_overview(admin_id):
         portfolio = load_portfolio(cid)
         rec = by_id.get(str(cid)) or {}
         email = (rec.get("email") or "").strip()
-        # Full name from the portfolio's display_name (the index only carries
-        # first_name); fall back to first_name, then to a bare "Client <id>".
-        name = (portfolio.get("display_name") or rec.get("first_name") or "").strip() or f"Client {cid}"
+        # Full "First Last" name: prefer the index's full name, then the portfolio's
+        # display_name, then the index first_name, then a bare "Client <id>". (The
+        # index carries "name" only once it's been rebuilt to include it — see
+        # build_people_index.py; until then non-seeded clients fall back to first_name.)
+        name = ((rec.get("name") or "").strip()
+                or (portfolio.get("display_name") or "").strip()
+                or (rec.get("first_name") or "").strip()
+                or f"Client {cid}")
         # Clicking the name opens a pre-addressed email; the Client ID opens that
-        # person's main page in Pipeline in a new tab.
-        name_html = (f'<a href="mailto:{html.escape(email)}">{html.escape(name)}</a>'
+        # person's main page in Pipeline in a new tab. Both are styled muted (.cname /
+        # .pd-id) rather than default link-blue.
+        name_html = (f'<a class="cname" href="mailto:{html.escape(email)}">{html.escape(name)}</a>'
                      if email else html.escape(name))
         pd_url = PD_PERSON_URL + urllib.parse.quote(str(cid))
-        id_html = (f'<a class="pd-id" href="{html.escape(pd_url)}" target="_blank" rel="noopener" '
-                   f'style="margin-left:.6rem;font-size:.8em;font-weight:400;opacity:.7">'
+        id_html = (f'<a class="pd-id" href="{html.escape(pd_url)}" target="_blank" rel="noopener">'
                    f'Client ID {html.escape(str(cid))}</a>')
         table_html = (_admin_holdings_table(portfolio, cid)
                       if portfolio.get("holdings") else '<p class="empty">(no holdings yet)</p>')
@@ -1117,6 +1122,11 @@ def html_response(body_html, status=200):
     h1 {{ font-family: 'Fraunces', Georgia, serif; font-size: 30px; font-weight: 600; letter-spacing: -0.01em; }}
     h2 {{ font-family: 'Fraunces', Georgia, serif; font-size: 19px; font-weight: 600; margin-bottom: 16px; }}
     .subtitle {{ font-size: 14px; color: var(--muted); margin: 6px 0 26px; }}
+    /* Admin roll-up heading links: muted, not default link-blue. */
+    .cname {{ color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line); }}
+    .cname:hover {{ border-bottom-color: var(--muted); }}
+    .pd-id {{ margin-left: .6rem; font-size: .78em; font-weight: 400; color: var(--muted); text-decoration: none; }}
+    .pd-id:hover {{ color: var(--ink); }}
     .table-wrap {{ overflow-x: auto; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
     th {{
