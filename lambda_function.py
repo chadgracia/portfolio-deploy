@@ -819,17 +819,17 @@ def render_portfolio(portfolio, is_admin=False):
 
 
 # ── Admin roll-up ─────────────────────────────────────────────────────────────────
-# An admin-only view of EVERY client's portfolio. Shares and Cost Basis are
-# inline-editable (same click-to-edit cells as the client view), but each editable
-# cell carries the block's target_client_id so the update POST writes to THAT client
-# rather than the logged-in admin's own portfolio. Everything else stays read-only:
-# no add-holding form, no remove buttons, no client action buttons. The admin gate
-# on the write path (handler) is the security boundary.
+# An admin-only view of EVERY client's portfolio with full edit capability: Shares
+# and Cost Basis are inline-editable, holdings can be added (a per-client form) and
+# removed (a per-row ×). Every control carries the block's target_client_id so the
+# write lands on THAT client, never the logged-in admin's own portfolio. The admin
+# gate on the write path (handler) is the security boundary. Only the client-facing
+# action buttons (Get Bids / Get Offers) are intentionally omitted.
 def _admin_holdings_table(portfolio, target_id):
     """The same valued table render_portfolio builds — same value_holding, _money,
     _shares, gain/loss, catalysts, indirect-mark note. Shares and Cost Basis are
-    editable via _edit_cell tagged with target_id (so edits write to that client);
-    the remaining cells are plain and the per-row action column is dropped (8 cols)."""
+    inline-editable and each row carries a remove (×) form, all tagged with target_id
+    so writes land on that client. 9 cols (trailing column holds the remove button)."""
     holdings = portfolio.get("holdings", [])
     rows = ""
     tot_current = tot_cost = 0.0
@@ -872,6 +872,14 @@ def _admin_holdings_table(portfolio, target_id):
           <td class="num">{value_cell}</td>
           <td class="num {_gl_class(v["gl"])}">{_money(v["gl"])}</td>
           {cat_cell}
+          <td class="acts">
+            <form method="post" class="rmform" onsubmit="return confirm('Remove this holding?')">
+              <input type="hidden" name="action" value="remove">
+              <input type="hidden" name="holding_id" value="{html.escape(h.get("holding_id",""))}">
+              <input type="hidden" name="target_client_id" value="{html.escape(str(target_id))}">
+              <button type="submit" class="x" title="Remove">&times;</button>
+            </form>
+          </td>
         </tr>"""
 
     total_gl = (tot_current - tot_cost) if (have_any_value and tot_cost) else None
@@ -882,6 +890,7 @@ def _admin_holdings_table(portfolio, target_id):
           <td>Portfolio</td><td></td><td></td><td></td><td></td>
           <td class="num">{_money(tot_current)}</td>
           <td class="num {_gl_class(total_gl)}">{_money(total_gl)}</td>
+          <td></td>
           <td></td>
         </tr>"""
 
@@ -899,7 +908,7 @@ def _admin_holdings_table(portfolio, target_id):
         <tr>
           <th>Company</th><th class="num">Shares</th><th class="num">Cost Basis / sh</th>
           <th class="num">LR</th><th class="num">Market Price&#42;</th><th class="num">Value</th>
-          <th class="num">Gain / Loss</th><th class="catalyst">Recent Developments</th>
+          <th class="num">Gain / Loss</th><th class="catalyst">Recent Developments</th><th></th>
         </tr>
       </thead>
       <tbody>{rows}{totals}</tbody>
@@ -908,16 +917,56 @@ def _admin_holdings_table(portfolio, target_id):
     {indirect_note}"""
 
 
+def _admin_add_form(target_id):
+    """Per-client add-holding form, scoped to target_id via a hidden target_client_id
+    so the new holding lands on that client. Mirrors render_portfolio's add form; the
+    company datalist is shared once per page (id=admin-company-list) to avoid emitting
+    the full company option list once per client block."""
+    structure_opts = "".join(f'<option>{s}</option>' for s in STRUCTURES)
+    return f"""
+    <div class="add">
+      <form method="post" class="addform">
+        <input type="hidden" name="action" value="add">
+        <input type="hidden" name="target_client_id" value="{html.escape(str(target_id))}">
+        <div class="grid">
+          <div class="field">
+            <label>Company</label>
+            <input name="company" list="admin-company-list" required autocomplete="off"
+                   placeholder="Start typing a company…">
+          </div>
+          <div class="field">
+            <label>Structure</label>
+            <select name="structure">{structure_opts}</select>
+          </div>
+          <div class="field">
+            <label>Shares</label>
+            <input type="number" name="shares" step="any" min="0" placeholder="e.g. 1500">
+          </div>
+          <div class="field">
+            <label>Cost per share (Gross)</label>
+            <input type="number" name="pps_cost" step="any" min="0" placeholder="Original purchase price">
+          </div>
+          <div class="field">
+            <label>Transaction date <span class="opt">(optional)</span></label>
+            <input type="date" name="transaction_date">
+          </div>
+        </div>
+        <button type="submit" class="btn-primary">Add holding</button>
+      </form>
+    </div>"""
+
+
 def render_admin_overview(admin_id):
-    """Admin-only READ-ONLY roll-up of every client's portfolio. Lists all portfolio
-    objects under portfolios/ in BUCKET, derives each client_id from the key, loads
-    it with load_portfolio(), and renders a plain valued table per client (no forms,
-    no edit script, no action buttons — see _readonly_holdings_table). Each block is
-    headed by the client's full name (portfolio display_name, else the index
-    first_name, else "Client <id>") as a mailto link, followed by the Client ID
-    linking to that person's Pipeline page in a new tab. Blocks are sorted by name and
-    an empty portfolio shows "(no holdings yet)". admin_id isn't used for scoping —
-    the admin sees everyone — but is kept for symmetry with the call site."""
+    """Admin-only roll-up of every client's portfolio, with full edit capability.
+    Lists all portfolio objects under portfolios/ in BUCKET, derives each client_id
+    from the key, loads it with load_portfolio(), and renders an editable valued table
+    plus an add-holding form per client (see _admin_holdings_table / _admin_add_form);
+    every write carries that client's target_client_id. Each block is headed by the
+    client's full name (portfolio display_name, else the index first_name, else
+    "Client <id>") as a mailto link, followed by the Client ID linking to that
+    person's Pipeline page in a new tab. Blocks are sorted by name. admin_id isn't
+    used for scoping — the admin sees everyone — but is kept for symmetry with the
+    call site."""
     s3 = boto3.client("s3")
     client_ids = []
     for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix="portfolios/"):
@@ -949,25 +998,31 @@ def render_admin_overview(admin_id):
         id_html = (f'<a class="pd-id" href="{html.escape(pd_url)}" target="_blank" rel="noopener" '
                    f'style="margin-left:.6rem;font-size:.8em;font-weight:400;opacity:.7">'
                    f'Client ID {html.escape(str(cid))}</a>')
-        inner = (_admin_holdings_table(portfolio, cid)
-                 if portfolio.get("holdings") else '<p class="empty">(no holdings yet)</p>')
+        table_html = (_admin_holdings_table(portfolio, cid)
+                      if portfolio.get("holdings") else '<p class="empty">(no holdings yet)</p>')
         blocks.append((name, f"""
     <section class="client-block" style="margin-top:2.5rem">
       <h2>{name_html}{id_html}</h2>
-      {inner}
+      {table_html}
+      {_admin_add_form(cid)}
     </section>"""))
 
     blocks.sort(key=lambda b: b[0].lower())
 
+    # One shared company datalist for every per-client add form (avoids repeating the
+    # full option list in each block).
+    company_options = "".join(
+        f'<option value="{html.escape(label)}"></option>' for label in picker_index())
     body = f"""
     <h1>All client portfolios</h1>
-    <p class="subtitle">Read-only roll-up across every client.</p>
+    <p class="subtitle">Add, edit, or remove holdings — changes save to that client's portfolio.</p>
+    <datalist id="admin-company-list">{company_options}</datalist>
     {INVITE_PANEL_HTML}
     {"".join(block for _, block in blocks)}"""
-    # INVITE_PANEL_HTML is the admin invite tool (not a client table) placed above the
-    # roll-up. EDIT_SCRIPT carries its lookup/send wiring (the invite IIFE); its other
-    # IIFEs are inert here — there are no .editable cells or .act buttons to bind, so
-    # the client tables stay strictly read-only.
+    # INVITE_PANEL_HTML is the admin invite tool placed above the roll-up. EDIT_SCRIPT
+    # wires both the invite panel and the inline-edit cells; the add/remove forms are
+    # plain POSTs. Every write here carries target_client_id and is admin-gated on the
+    # server, so it lands on the intended client and never leaks to non-admins.
     return html_response(body + EDIT_SCRIPT)
 
 
