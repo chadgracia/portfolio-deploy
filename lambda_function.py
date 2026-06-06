@@ -465,12 +465,16 @@ def _hover_cell(display, title, cls="num"):
     return f'<td class="{cls}"{t}>{display}</td>'
 
 
-def _edit_cell(holding_id, field, value, display, title=None):
+def _edit_cell(holding_id, field, value, display, title=None, target=None):
+    # target (a client_id) is set only by the admin roll-up: it rides along as
+    # data-target-client-id so the edit POST writes to THAT client, not the admin's
+    # own portfolio. Omitted in the client view, where edits target the own session.
     t = f' title="{html.escape(title)}"' if title else ""
+    tgt = f' data-target-client-id="{html.escape(str(target))}"' if target else ""
     return (
         f'<td class="num"{t}><span class="editable" '
         f'data-holding-id="{html.escape(holding_id)}" '
-        f'data-field="{field}" data-value="{html.escape(_raw(value))}">{display}</span></td>'
+        f'data-field="{field}" data-value="{html.escape(_raw(value))}"{tgt}>{display}</span></td>'
     )
 
 
@@ -502,6 +506,8 @@ EDIT_SCRIPT = """<script>
         hidden('action', 'update');
         hidden('holding_id', cell.getAttribute('data-holding-id'));
         hidden(cell.getAttribute('data-field'), input.value);
+        var tgt = cell.getAttribute('data-target-client-id');
+        if (tgt) hidden('target_client_id', tgt);   // admin roll-up: write to that client
         document.body.appendChild(form); form.submit();
       }
       input.addEventListener('keydown', function (e) {
@@ -812,16 +818,18 @@ def render_portfolio(portfolio, is_admin=False):
     return html_response(body + EDIT_SCRIPT)
 
 
-# ── Admin read-only roll-up ───────────────────────────────────────────────────────
-# An admin-only view of EVERY client's portfolio. It deliberately renders plain,
-# valued rows with NO interactive controls: the add-holding form, the inline-edit
-# script, and the row action / remove buttons all POST scoped to the logged-in
-# (admin) session, so reusing them here would mis-write to the admin's OWN
-# portfolio. Read-only is the whole point.
-def _readonly_holdings_table(portfolio):
+# ── Admin roll-up ─────────────────────────────────────────────────────────────────
+# An admin-only view of EVERY client's portfolio. Shares and Cost Basis are
+# inline-editable (same click-to-edit cells as the client view), but each editable
+# cell carries the block's target_client_id so the update POST writes to THAT client
+# rather than the logged-in admin's own portfolio. Everything else stays read-only:
+# no add-holding form, no remove buttons, no client action buttons. The admin gate
+# on the write path (handler) is the security boundary.
+def _admin_holdings_table(portfolio, target_id):
     """The same valued table render_portfolio builds — same value_holding, _money,
-    _shares, gain/loss, catalysts, indirect-mark note — but with the editable cells
-    replaced by plain ones and the per-row action column dropped entirely (8 cols)."""
+    _shares, gain/loss, catalysts, indirect-mark note. Shares and Cost Basis are
+    editable via _edit_cell tagged with target_id (so edits write to that client);
+    the remaining cells are plain and the per-row action column is dropped (8 cols)."""
     holdings = portfolio.get("holdings", [])
     rows = ""
     tot_current = tot_cost = 0.0
@@ -857,8 +865,8 @@ def _readonly_holdings_table(portfolio):
         <tr>
           <td class="co">{html.escape(h.get("company_name", ""))}
               <span class="struct">{html.escape(h.get("structure", ""))}</span></td>
-          <td class="num">{_shares(h.get("shares"))}</td>
-          {_hover_cell(_money(h.get("pps_cost")), cost_title)}
+          {_edit_cell(h.get("holding_id", ""), "shares", h.get("shares"), _shares(h.get("shares")), target=target_id)}
+          {_edit_cell(h.get("holding_id", ""), "pps_cost", h.get("pps_cost"), _money(h.get("pps_cost")), title=cost_title, target=target_id)}
           {_hover_cell(_money(v["last_round"]), lr_title)}
           {_hover_cell(_money(v["hiive_price"]), price_title)}
           <td class="num">{value_cell}</td>
@@ -941,7 +949,7 @@ def render_admin_overview(admin_id):
         id_html = (f'<a class="pd-id" href="{html.escape(pd_url)}" target="_blank" rel="noopener" '
                    f'style="margin-left:.6rem;font-size:.8em;font-weight:400;opacity:.7">'
                    f'Client ID {html.escape(str(cid))}</a>')
-        inner = (_readonly_holdings_table(portfolio)
+        inner = (_admin_holdings_table(portfolio, cid)
                  if portfolio.get("holdings") else '<p class="empty">(no holdings yet)</p>')
         blocks.append((name, f"""
     <section class="client-block" style="margin-top:2.5rem">
@@ -1294,7 +1302,13 @@ def lambda_handler(event, context):
 
     if method == "POST":
         form = _parse_body(event)
-        portfolio = load_portfolio(client_id)
+        # Admin roll-up edits carry target_client_id to write ANOTHER client's
+        # portfolio. The is_admin gate here is the security boundary: a non-admin's
+        # target_client_id is ignored, so they can only ever touch their own.
+        target = form.get("target_client_id")
+        edit_id = target if (target and is_admin) else client_id
+        portfolio = load_portfolio(edit_id)
+        portfolio.setdefault("client_id", edit_id)   # ensure save targets the right key
         action = form.get("action")
         # Client action buttons + feedback: email Chad, return JSON (no reload).
         if action in ("get_bids", "get_offers"):
