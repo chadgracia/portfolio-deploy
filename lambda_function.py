@@ -480,6 +480,17 @@ def _edit_cell(holding_id, field, value, display, title=None, target=None):
 
 # ── Inline-edit script (click a Shares or Cost cell; Enter saves, Esc cancels) ─────
 EDIT_SCRIPT = """<script>
+// Full-screen "working" overlay shown while a mutating POST is in flight. Adding the
+// first holding can take ~a minute (cold start + loading the company list), so this
+// reassures the client and stops them closing the tab or double-submitting. It clears
+// itself when the post/redirect response loads the next page.
+function ggShowWorking(msg) {
+  if (document.querySelector('.working-overlay')) return;
+  var ov = document.createElement('div');
+  ov.className = 'working-overlay';
+  ov.innerHTML = '<div class="working-box"><div class="spinner"></div><p>' + msg + '</p></div>';
+  document.body.appendChild(ov);
+}
 (function () {
   document.querySelectorAll('.editable').forEach(function (cell) {
     cell.addEventListener('click', function () {
@@ -508,6 +519,7 @@ EDIT_SCRIPT = """<script>
         hidden(cell.getAttribute('data-field'), input.value);
         var tgt = cell.getAttribute('data-target-client-id');
         if (tgt) hidden('target_client_id', tgt);   // admin roll-up: write to that client
+        ggShowWorking('Saving… please keep this page open.');
         document.body.appendChild(form); form.submit();
       }
       input.addEventListener('keydown', function (e) {
@@ -646,6 +658,21 @@ EDIT_SCRIPT = """<script>
         sendBtn.disabled = false;
         sendBtn.textContent = 'Send invite';
       });
+  });
+})();
+(function () {
+  // Show the working overlay on any add/remove submit (full-page POST → ~1 min on a
+  // cold start). HTML5 validation runs first, so the overlay only appears once the
+  // form actually submits. The button is disabled to block a double-submit.
+  document.querySelectorAll('form.addform').forEach(function (f) {
+    f.addEventListener('submit', function () {
+      var b = f.querySelector('button[type="submit"]');
+      if (b) { b.disabled = true; b.textContent = 'Adding…'; }
+      ggShowWorking('Adding your holding — this can take up to a minute. Please keep this page open.');
+    });
+  });
+  document.querySelectorAll('form.rmform').forEach(function (f) {
+    f.addEventListener('submit', function () { ggShowWorking('Removing… please keep this page open.'); });
   });
 })();
 </script>"""
@@ -1127,6 +1154,14 @@ def html_response(body_html, status=200):
     .cname:hover {{ border-bottom-color: var(--muted); }}
     .pd-id {{ margin-left: .6rem; font-size: .78em; font-weight: 400; color: var(--muted); text-decoration: none; }}
     .pd-id:hover {{ color: var(--ink); }}
+    /* "Working" overlay while a mutating POST is in flight (add/remove/inline-edit). */
+    .working-overlay {{ position: fixed; inset: 0; z-index: 1000; background: rgba(244,242,238,.9);
+      display: flex; align-items: center; justify-content: center; }}
+    .working-box {{ max-width: 320px; padding: 0 24px; text-align: center; color: var(--ink); font-size: 15px; line-height: 1.5; }}
+    .working-box p {{ margin-top: 16px; }}
+    .spinner {{ width: 38px; height: 38px; margin: 0 auto; border: 3px solid var(--line);
+      border-top-color: var(--accent); border-radius: 50%; animation: ggspin .8s linear infinite; }}
+    @keyframes ggspin {{ to {{ transform: rotate(360deg); }} }}
     .table-wrap {{ overflow-x: auto; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
     th {{
