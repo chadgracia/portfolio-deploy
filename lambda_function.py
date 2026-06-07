@@ -768,12 +768,6 @@ def _add_form(target_id=None):
       <form method="post" class="addform">
         <input type="hidden" name="action" value="add">
         {target_hidden}
-        <div class="seg" role="radiogroup" aria-label="Entry type">
-          <input type="radio" id="m-h-{suffix}" name="status" value="holding" checked>
-          <label for="m-h-{suffix}">Holding</label>
-          <input type="radio" id="m-w-{suffix}" name="status" value="watchlist">
-          <label for="m-w-{suffix}">Watchlist</label>
-        </div>
         <div class="grid">
           <div class="field f-company">
             <label>Company</label>
@@ -797,7 +791,15 @@ def _add_form(target_id=None):
             <input type="date" name="transaction_date">
           </div>
         </div>
-        <button type="submit" class="btn-primary">Add holding</button>
+        <div class="add-actions">
+          <div class="seg" role="radiogroup" aria-label="Add as holding or watchlist">
+            <input type="radio" id="m-h-{suffix}" name="status" value="holding" checked>
+            <label for="m-h-{suffix}">Holding</label>
+            <input type="radio" id="m-w-{suffix}" name="status" value="watchlist">
+            <label for="m-w-{suffix}">Watchlist</label>
+          </div>
+          <button type="submit" class="btn-primary">Add holding</button>
+        </div>
       </form>
     </div>"""
 
@@ -1266,8 +1268,9 @@ def html_response(body_html, status=200):
     .spinner {{ width: 38px; height: 38px; margin: 0 auto; border: 3px solid var(--line);
       border-top-color: var(--accent); border-radius: 50%; animation: ggspin .8s linear infinite; }}
     @keyframes ggspin {{ to {{ transform: rotate(360deg); }} }}
-    /* Segmented Holding|Watchlist toggle in the add form. */
-    .seg {{ display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; margin-bottom: 18px; }}
+    /* Segmented Holding|Watchlist toggle, sat next to the Add button. */
+    .add-actions {{ display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }}
+    .seg {{ display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }}
     .seg input {{ position: absolute; opacity: 0; pointer-events: none; }}
     .seg label {{ padding: 8px 18px; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; background: #fff; }}
     .seg label + input + label {{ border-left: 1px solid var(--line); }}
