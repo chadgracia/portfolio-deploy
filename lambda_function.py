@@ -295,19 +295,24 @@ def add_holding(portfolio, form):
     company_id = picker_index().get(name_in)
     if not company_id:
         return  # not a recognized company; the picker should prevent this
+    status = "watchlist" if form.get("status") == "watchlist" else "holding"
     structure = form.get("structure", "None")
     if structure not in STRUCTURES:
         structure = "None"
     txn = (form.get("transaction_date") or "").strip() or None
     now = datetime.now(timezone.utc).isoformat()
+    # Mark at add time, so we can later show movement since the item was added.
+    info = company_prices().get(company_id)
     portfolio["holdings"].append({
         "holding_id": "hld_" + uuid.uuid4().hex[:8],
         "company_id": company_id,
         "company_name": tracked_companies()[company_id],
+        "status": status,                              # "holding" or "watchlist"
         "shares": _to_float(form.get("shares")),
-        "pps_cost": _to_float(form.get("pps_cost")),   # Gross PPS the client paid
+        "pps_cost": _to_float(form.get("pps_cost")),   # Gross PPS paid; Target Price for watchlist
         "structure": structure,
         "transaction_date": txn,                       # optional, manual
+        "price_at_add": info["hiive_price"] if info else None,
         "created_at": now,
         "updated_at": now,
     })
@@ -317,6 +322,19 @@ def remove_holding(portfolio, holding_id):
     portfolio["holdings"] = [
         h for h in portfolio["holdings"] if h.get("holding_id") != holding_id
     ]
+
+
+def convert_holding(portfolio, holding_id, form):
+    # Watchlist -> holding. The Target Price already lives in pps_cost and becomes the
+    # starting cost basis (editable later); shares are optional at convert time.
+    for h in portfolio["holdings"]:
+        if h.get("holding_id") != holding_id:
+            continue
+        h["status"] = "holding"
+        if (form.get("shares") or "").strip():
+            h["shares"] = _to_float(form.get("shares"))
+        h["updated_at"] = datetime.now(timezone.utc).isoformat()
+        break
 
 
 def update_holding(portfolio, holding_id, form):
@@ -661,14 +679,52 @@ function ggShowWorking(msg) {
   });
 })();
 (function () {
-  // Show the working overlay on any add/remove submit (full-page POST → ~1 min on a
-  // cold start). HTML5 validation runs first, so the overlay only appears once the
-  // form actually submits. The button is disabled to block a double-submit.
+  // Segmented Holding|Watchlist toggle morphs each add form: in watchlist mode hide
+  // Shares / Structure / Transaction date and relabel Cost -> Target Price.
+  document.querySelectorAll('form.addform').forEach(function (f) {
+    var radios = f.querySelectorAll('input[name="status"]');
+    if (!radios.length) return;
+    var shares = f.querySelector('.f-shares'), struct = f.querySelector('.f-structure'),
+        date = f.querySelector('.f-date'), costLabel = f.querySelector('.cost-label'),
+        costInput = f.querySelector('input[name="pps_cost"]'), btn = f.querySelector('button[type="submit"]');
+    function apply() {
+      var watch = (f.querySelector('input[name="status"]:checked') || {}).value === 'watchlist';
+      [shares, struct, date].forEach(function (el) { if (el) el.style.display = watch ? 'none' : ''; });
+      if (costLabel) costLabel.textContent = watch ? 'Target Price' : 'Cost per share (Gross)';
+      if (costInput) costInput.placeholder = watch ? "Price you'd buy at" : 'Original purchase price';
+      if (btn) btn.textContent = watch ? 'Add to watchlist' : 'Add holding';
+    }
+    radios.forEach(function (r) { r.addEventListener('change', apply); });
+    apply();
+  });
+})();
+(function () {
+  // "I bought this" — convert a watchlist item to a holding, prompting for shares.
+  document.querySelectorAll('.convert-btn').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var sh = prompt('How many shares did you buy? (leave blank to fill in later)');
+      if (sh === null) return;   // cancelled
+      var f = document.createElement('form'); f.method = 'post';
+      function hid(n, v) { var i = document.createElement('input'); i.type = 'hidden'; i.name = n; i.value = v; f.appendChild(i); }
+      hid('action', 'convert');
+      hid('holding_id', b.getAttribute('data-hid'));
+      if (sh.trim()) hid('shares', sh.trim());
+      var tgt = b.getAttribute('data-target-client-id');
+      if (tgt) hid('target_client_id', tgt);
+      ggShowWorking('Converting… please keep this page open.');
+      document.body.appendChild(f); f.submit();
+    });
+  });
+})();
+(function () {
+  // Working overlay on any add/remove submit (full-page POST → ~1 min on a cold
+  // start). HTML5 validation runs first, so it only fires on a real submit. The
+  // button is disabled to block a double-submit.
   document.querySelectorAll('form.addform').forEach(function (f) {
     f.addEventListener('submit', function () {
       var b = f.querySelector('button[type="submit"]');
       if (b) { b.disabled = true; b.textContent = 'Adding…'; }
-      ggShowWorking('Adding your holding — this can take up to a minute. Please keep this page open.');
+      ggShowWorking('Adding — this can take up to a minute. Please keep this page open.');
     });
   });
   document.querySelectorAll('form.rmform').forEach(function (f) {
@@ -696,8 +752,114 @@ INVITE_PANEL_HTML = """
     </div>"""
 
 
+def _add_form(target_id=None):
+    """Add a holding OR a watchlist item. A segmented Holding|Watchlist toggle
+    (Holding selected by default) morphs the fields via JS: in watchlist mode Shares,
+    Structure and Transaction date hide and 'Cost per share' relabels to 'Target
+    Price'. pps_cost stores the cost basis (holding) or the target price (watchlist).
+    target_id (admin roll-up) scopes the write to that client; None = own portfolio.
+    The company datalist (id 'company-list') is emitted once per page by the caller."""
+    suffix = html.escape(str(target_id)) if target_id else "self"
+    structure_opts = "".join(f'<option>{s}</option>' for s in STRUCTURES)
+    target_hidden = (f'<input type="hidden" name="target_client_id" value="{html.escape(str(target_id))}">'
+                     if target_id else "")
+    return f"""
+    <div class="add">
+      <form method="post" class="addform">
+        <input type="hidden" name="action" value="add">
+        {target_hidden}
+        <div class="seg" role="radiogroup" aria-label="Entry type">
+          <input type="radio" id="m-h-{suffix}" name="status" value="holding" checked>
+          <label for="m-h-{suffix}">Holding</label>
+          <input type="radio" id="m-w-{suffix}" name="status" value="watchlist">
+          <label for="m-w-{suffix}">Watchlist</label>
+        </div>
+        <div class="grid">
+          <div class="field f-company">
+            <label>Company</label>
+            <input name="company" list="company-list" required autocomplete="off"
+                   placeholder="Start typing a company…">
+          </div>
+          <div class="field f-structure">
+            <label>Structure</label>
+            <select name="structure">{structure_opts}</select>
+          </div>
+          <div class="field f-shares">
+            <label>Shares</label>
+            <input type="number" name="shares" step="any" min="0" placeholder="e.g. 1500">
+          </div>
+          <div class="field f-cost">
+            <label class="cost-label">Cost per share (Gross)</label>
+            <input type="number" name="pps_cost" step="any" min="0" placeholder="Original purchase price">
+          </div>
+          <div class="field f-date">
+            <label>Transaction date <span class="opt">(optional)</span></label>
+            <input type="date" name="transaction_date">
+          </div>
+        </div>
+        <button type="submit" class="btn-primary">Add holding</button>
+      </form>
+    </div>"""
+
+
+def _watchlist_table(items, target_id=None, show_client_actions=True):
+    """Watchlist ('tracking to buy') table: Company, Target Price (inline-editable),
+    LR, Market Price, Recent Developments, actions. Never counted in portfolio totals.
+    The Market Price cell turns green when it has reached / fallen below the Target
+    Price. Actions: Get Offers (client view only), 'I bought this' convert, remove."""
+    rows = ""
+    for h in items:
+        v = value_holding(h)
+        hp, target = v["hiive_price"], h.get("pps_cost")
+        hit = hp is not None and target is not None and hp <= target
+        lr_title = f'As of {v["last_round_as_of"]}' if v["last_round_as_of"] else None
+        price_title = f'As of {v["as_of"]}' if v["as_of"] else None
+        price_cell = (f'<td class="num wl-hit" title="At or below your target">{_money(hp)} ●</td>'
+                      if hit else _hover_cell(_money(hp), price_title))
+        cat = company_catalysts().get(str(h.get("company_id", "")))
+        cat_cell = (f'<td class="catalyst has-cat">{html.escape(cat)}</td>'
+                    if cat else '<td class="catalyst empty-cat">—</td>')
+        hid = html.escape(h.get("holding_id", ""))
+        tgt_hidden = (f'<input type="hidden" name="target_client_id" value="{html.escape(str(target_id))}">'
+                      if target_id else "")
+        tgt_data = f' data-target-client-id="{html.escape(str(target_id))}"' if target_id else ""
+        acts = ""
+        if show_client_actions:
+            acts += f'<button type="button" class="act" data-act="get_offers" data-hid="{hid}">Get Offers</button>'
+        acts += f'<button type="button" class="act convert-btn" data-hid="{hid}"{tgt_data}>I bought this</button>'
+        acts += (f'<form method="post" class="rmform" onsubmit="return confirm(\'Remove from watchlist?\')">'
+                 f'<input type="hidden" name="action" value="remove">'
+                 f'<input type="hidden" name="holding_id" value="{hid}">{tgt_hidden}'
+                 f'<button type="submit" class="x" title="Remove">&times;</button></form>')
+        rows += f"""
+        <tr>
+          <td class="co">{html.escape(h.get("company_name", ""))}</td>
+          {_edit_cell(h.get("holding_id", ""), "pps_cost", target, _money(target), title="Target price", target=target_id)}
+          {_hover_cell(_money(v["last_round"]), lr_title)}
+          {price_cell}
+          {cat_cell}
+          <td class="acts">{acts}</td>
+        </tr>"""
+    return f"""
+    <h2 class="wl-head">Watchlist</h2>
+    <p class="subtitle">Companies you're tracking to buy — the market price turns green when it reaches your target.</p>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Company</th><th class="num">Target Price</th><th class="num">LR</th>
+          <th class="num">Market Price&#42;</th><th class="catalyst">Recent Developments</th><th></th>
+        </tr>
+      </thead>
+      <tbody>{rows}</tbody>
+    </table>
+    </div>"""
+
+
 def render_portfolio(portfolio, is_admin=False):
-    holdings = portfolio.get("holdings", [])
+    all_items = portfolio.get("holdings", [])
+    held = [h for h in all_items if h.get("status") != "watchlist"]
+    watch = [h for h in all_items if h.get("status") == "watchlist"]
     title = portfolio.get("display_name") or "Your portfolio"
     invite_panel = INVITE_PANEL_HTML if is_admin else ""
     rows = ""
@@ -705,7 +867,7 @@ def render_portfolio(portfolio, is_admin=False):
     have_any_value = False
     have_indirect = False
 
-    for h in holdings:
+    for h in held:
         v = value_holding(h)
         if v["current"] is not None:
             tot_current += v["current"]
@@ -752,7 +914,7 @@ def render_portfolio(portfolio, is_admin=False):
           </td>
         </tr>"""
 
-    if not holdings:
+    if not held:
         rows = """
         <tr><td colspan="9" class="empty">No holdings yet. Add one below to see it valued.</td></tr>"""
 
@@ -779,7 +941,7 @@ def render_portfolio(portfolio, is_admin=False):
         f'<option value="{html.escape(label)}"></option>'
         for label in picker_index()
     )
-    structure_opts = "".join(f'<option>{s}</option>' for s in STRUCTURES)
+    watchlist_section = _watchlist_table(watch, show_client_actions=True) if watch else ""
 
     body = f"""
     <h1>{html.escape(title)}</h1>
@@ -803,37 +965,11 @@ def render_portfolio(portfolio, is_admin=False):
     not a Rainmaker Securities valuation, and reflects the as-of date shown on hover. Figures
     are for tracking only and are not an offer, a quote, or investment advice.</p>
 
-    <div class="add">
-      <h2>Add a holding</h2>
-      <form method="post" class="addform">
-        <input type="hidden" name="action" value="add">
-        <div class="grid">
-          <div class="field">
-            <label>Company</label>
-            <input name="company" list="company-list" required autocomplete="off"
-                   placeholder="Start typing a company…">
-            <datalist id="company-list">{options}</datalist>
-          </div>
-          <div class="field">
-            <label>Structure</label>
-            <select name="structure">{structure_opts}</select>
-          </div>
-          <div class="field">
-            <label>Shares</label>
-            <input type="number" name="shares" step="any" min="0" placeholder="e.g. 1500">
-          </div>
-          <div class="field">
-            <label>Cost per share (Gross)</label>
-            <input type="number" name="pps_cost" step="any" min="0" placeholder="Original purchase price">
-          </div>
-          <div class="field">
-            <label>Transaction date <span class="opt">(optional)</span></label>
-            <input type="date" name="transaction_date">
-          </div>
-        </div>
-        <button type="submit" class="btn-primary">Add holding</button>
-      </form>
-    </div>
+    {watchlist_section}
+
+    <h2>Add to your portfolio</h2>
+    <datalist id="company-list">{options}</datalist>
+    {_add_form()}
 
     <div class="feedback">
       <h2>Feature Request</h2>
@@ -856,8 +992,9 @@ def _admin_holdings_table(portfolio, target_id):
     """The same valued table render_portfolio builds — same value_holding, _money,
     _shares, gain/loss, catalysts, indirect-mark note. Shares and Cost Basis are
     inline-editable and each row carries a remove (×) form, all tagged with target_id
-    so writes land on that client. 9 cols (trailing column holds the remove button)."""
-    holdings = portfolio.get("holdings", [])
+    so writes land on that client. 9 cols (trailing column holds the remove button).
+    Watchlist items are excluded here — they render in their own _watchlist_table."""
+    holdings = [h for h in portfolio.get("holdings", []) if h.get("status") != "watchlist"]
     rows = ""
     tot_current = tot_cost = 0.0
     have_any_value = False
@@ -944,51 +1081,13 @@ def _admin_holdings_table(portfolio, target_id):
     {indirect_note}"""
 
 
-def _admin_add_form(target_id):
-    """Per-client add-holding form, scoped to target_id via a hidden target_client_id
-    so the new holding lands on that client. Mirrors render_portfolio's add form; the
-    company datalist is shared once per page (id=admin-company-list) to avoid emitting
-    the full company option list once per client block."""
-    structure_opts = "".join(f'<option>{s}</option>' for s in STRUCTURES)
-    return f"""
-    <div class="add">
-      <form method="post" class="addform">
-        <input type="hidden" name="action" value="add">
-        <input type="hidden" name="target_client_id" value="{html.escape(str(target_id))}">
-        <div class="grid">
-          <div class="field">
-            <label>Company</label>
-            <input name="company" list="admin-company-list" required autocomplete="off"
-                   placeholder="Start typing a company…">
-          </div>
-          <div class="field">
-            <label>Structure</label>
-            <select name="structure">{structure_opts}</select>
-          </div>
-          <div class="field">
-            <label>Shares</label>
-            <input type="number" name="shares" step="any" min="0" placeholder="e.g. 1500">
-          </div>
-          <div class="field">
-            <label>Cost per share (Gross)</label>
-            <input type="number" name="pps_cost" step="any" min="0" placeholder="Original purchase price">
-          </div>
-          <div class="field">
-            <label>Transaction date <span class="opt">(optional)</span></label>
-            <input type="date" name="transaction_date">
-          </div>
-        </div>
-        <button type="submit" class="btn-primary">Add holding</button>
-      </form>
-    </div>"""
-
-
 def render_admin_overview(admin_id):
     """Admin-only roll-up of every client's portfolio, with full edit capability.
     Lists all portfolio objects under portfolios/ in BUCKET, derives each client_id
-    from the key, loads it with load_portfolio(), and renders an editable valued table
-    plus an add-holding form per client (see _admin_holdings_table / _admin_add_form);
-    every write carries that client's target_client_id. Each block is headed by the
+    from the key, loads it with load_portfolio(), and renders an editable holdings
+    table, a watchlist table, and an add form per client (see _admin_holdings_table /
+    _watchlist_table / _add_form); every write carries that client's target_client_id.
+    Each block is headed by the
     client's full name (index "name", else portfolio display_name, else first_name,
     else "Client <id>") as a mailto link, followed by the Client ID linking to that
     person's Pipeline page in a new tab. Blocks are sorted by name. admin_id isn't
@@ -1030,25 +1129,30 @@ def render_admin_overview(admin_id):
         pd_url = PD_PERSON_URL + urllib.parse.quote(str(cid))
         id_html = (f'<a class="pd-id" href="{html.escape(pd_url)}" target="_blank" rel="noopener">'
                    f'Client ID {html.escape(str(cid))}</a>')
+        items = portfolio.get("holdings", [])
+        held = [h for h in items if h.get("status") != "watchlist"]
+        watch = [h for h in items if h.get("status") == "watchlist"]
         table_html = (_admin_holdings_table(portfolio, cid)
-                      if portfolio.get("holdings") else '<p class="empty">(no holdings yet)</p>')
+                      if held else '<p class="empty">(no holdings yet)</p>')
+        watch_html = _watchlist_table(watch, target_id=cid, show_client_actions=False) if watch else ""
         blocks.append((name, f"""
     <section class="client-block" style="margin-top:2.5rem">
       <h2>{name_html}{id_html}</h2>
       {table_html}
-      {_admin_add_form(cid)}
+      {watch_html}
+      {_add_form(cid)}
     </section>"""))
 
     blocks.sort(key=lambda b: b[0].lower())
 
     # One shared company datalist for every per-client add form (avoids repeating the
-    # full option list in each block).
+    # full option list in each block); _add_form references it by id 'company-list'.
     company_options = "".join(
         f'<option value="{html.escape(label)}"></option>' for label in picker_index())
     body = f"""
     <h1>All client portfolios</h1>
-    <p class="subtitle">Add, edit, or remove holdings — changes save to that client's portfolio.</p>
-    <datalist id="admin-company-list">{company_options}</datalist>
+    <p class="subtitle">Add, edit, or remove holdings and watchlist items — changes save to that client's portfolio.</p>
+    <datalist id="company-list">{company_options}</datalist>
     {INVITE_PANEL_HTML}
     {"".join(block for _, block in blocks)}"""
     # INVITE_PANEL_HTML is the admin invite tool placed above the roll-up. EDIT_SCRIPT
@@ -1162,6 +1266,15 @@ def html_response(body_html, status=200):
     .spinner {{ width: 38px; height: 38px; margin: 0 auto; border: 3px solid var(--line);
       border-top-color: var(--accent); border-radius: 50%; animation: ggspin .8s linear infinite; }}
     @keyframes ggspin {{ to {{ transform: rotate(360deg); }} }}
+    /* Segmented Holding|Watchlist toggle in the add form. */
+    .seg {{ display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; margin-bottom: 18px; }}
+    .seg input {{ position: absolute; opacity: 0; pointer-events: none; }}
+    .seg label {{ padding: 8px 18px; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; background: #fff; }}
+    .seg label + input + label {{ border-left: 1px solid var(--line); }}
+    .seg input:checked + label {{ background: var(--accent); color: #fff; }}
+    /* Watchlist section + "at/below target" highlight. */
+    .wl-head {{ margin-top: 34px; }}
+    td.wl-hit {{ color: var(--pos); font-weight: 700; }}
     .table-wrap {{ overflow-x: auto; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
     th {{
@@ -1449,6 +1562,8 @@ def lambda_handler(event, context):
             remove_holding(portfolio, form.get("holding_id", ""))
         elif action == "update":
             update_holding(portfolio, form.get("holding_id", ""), form)
+        elif action == "convert":
+            convert_holding(portfolio, form.get("holding_id", ""), form)
         else:
             add_holding(portfolio, form)
         save_portfolio(portfolio)
