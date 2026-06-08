@@ -29,6 +29,8 @@ import hmac
 import hashlib
 import html
 import urllib.parse
+import urllib.request
+import urllib.error
 import uuid
 from datetime import datetime, timezone
 
@@ -90,6 +92,23 @@ PEOPLE_KEY        = "people.json"        # 113 MB CRM people snapshot; source fo
 PEOPLE_INDEX_KEY  = "people_index.json"  # small email->id / id->{email,first_name} index (build_people_index.py)
 ORG_TYPE_FIELD    = "custom_label_625142"
 KEEP_ORG_TYPE_IDS = {5103523}        # Traded Issuer (id 5103523); Private Company intentionally excluded
+
+# ── Pipeline CRM write path (the Build Watchlist dual write) ──────────────────────
+# Constants + helpers lifted verbatim from interest-update-form/lambda_function.py,
+# whose JWT (pipeline-token/pipeline-jwt.json) already has person-update scope. The
+# payload shapes below mirror that Lambda's proven person-update call exactly.
+PIPELINE_JWT_BUCKET = "pipeline-token"
+PIPELINE_JWT_KEY    = "pipeline-jwt.json"
+BUY_INTEREST_FIELD  = "custom_label_3322093"
+SELL_INTEREST_FIELD = "custom_label_3759156"
+BROADCAST_FIELD     = "custom_label_3774841"   # YES = 6535328, NO = 6535329
+BROADCAST_YES       = 6535328
+BROADCAST_NO        = 6535329
+BUY_INTEREST_LABEL_ID  = 3322093   # dropdown-definition ids for load_security_maps()
+SELL_INTEREST_LABEL_ID = 3759156
+# S3-only preference options (per the prefs split: structure + fees never go to CRM).
+WL_STRUCTURES = ["Direct", "Fund", "Forward"]
+WL_FEES       = ["Management", "Carry"]
 
 _companies_cache = None   # {company_id(str): name}, set on first use
 
@@ -304,6 +323,8 @@ def add_holding(portfolio, form):
     structure = form.get("structure", "None")
     if structure not in STRUCTURES:
         structure = "None"
+    # side (buy/sell) only applies to watchlist entries; holdings leave it None.
+    side = form.get("side") if (status == "watchlist" and form.get("side") in ("buy", "sell")) else None
     txn = (form.get("transaction_date") or "").strip() or None
     now = datetime.now(timezone.utc).isoformat()
     # Mark at add time, so we can later show movement since the item was added.
@@ -313,6 +334,7 @@ def add_holding(portfolio, form):
         "company_id": company_id,
         "company_name": tracked_companies()[company_id],
         "status": status,                              # "holding" or "watchlist"
+        "side": side,                                  # "buy"/"sell" for watchlist, else None
         "shares": _to_float(form.get("shares")),
         "pps_cost": _to_float(form.get("pps_cost")),   # Gross PPS paid; Target Price for watchlist
         "structure": structure,
@@ -370,6 +392,199 @@ def update_holding(portfolio, holding_id, form):
             h["pps_cost"] = _to_float(form.get("pps_cost"))
         h["updated_at"] = datetime.now(timezone.utc).isoformat()
         break
+
+
+# ── Pipeline CRM helpers (lifted verbatim from interest-update-form) ──────────────
+_pipeline_security_cache = None   # load_security_maps() result, cached on the warm instance
+
+
+def get_jwt():
+    s3 = boto3.client("s3")
+    obj = s3.get_object(Bucket=PIPELINE_JWT_BUCKET, Key=PIPELINE_JWT_KEY)
+    return json.loads(obj["Body"].read())["jwt"]
+
+
+def call_pipeline_api(method, endpoint, payload=None, jwt=None):
+    base = "https://api.pipelinecrm.com/api/v3"
+    url = f"{base}{endpoint}"
+    headers = {"Authorization": f"Bearer {jwt}", "Content-Type": "application/json"}
+    data = json.dumps(payload).encode() if payload else None
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return {"status": r.status, "data": json.loads(r.read().decode())}
+    except urllib.error.HTTPError as e:
+        return {"status": e.code, "data": e.read().decode()}
+    except Exception as e:
+        return {"status": 500, "data": str(e)}
+
+
+def load_security_maps(jwt):
+    """{'buy'|'sell': {'id_to_name': {option_id: name}, 'name_to_id': {lower_name: option_id}}}.
+    The interest fields store dropdown option ids, not names; this is the only source
+    of the valid/writable company set, so the Build Watchlist chips come from here."""
+    global _pipeline_security_cache
+    if _pipeline_security_cache is not None:
+        return _pipeline_security_cache
+    out = {}
+    for key, label_id in [("buy", BUY_INTEREST_LABEL_ID), ("sell", SELL_INTEREST_LABEL_ID)]:
+        result = call_pipeline_api(
+            "GET", f"/admin/person_custom_field_labels/{label_id}.json", jwt=jwt)
+        entries = []
+        if result["status"] == 200:
+            data = result["data"]
+            entries = (data.get("entry") or data).get("custom_field_label_dropdown_entries", [])
+        id_to_name = {int(e["id"]): e["name"] for e in entries}
+        name_to_id = {e["name"].strip().lower(): int(e["id"]) for e in entries}
+        out[key] = {"id_to_name": id_to_name, "name_to_id": name_to_id}
+    _pipeline_security_cache = out
+    return out
+
+
+def cf_id_list(cf_value):
+    """Normalise a multi-select custom_field value into a list of ints (lifted)."""
+    if cf_value is None or cf_value == "":
+        return []
+    if isinstance(cf_value, list):
+        out = []
+        for v in cf_value:
+            try:
+                out.append(int(v))
+            except (ValueError, TypeError):
+                pass
+        return out
+    try:
+        return [int(cf_value)]
+    except (ValueError, TypeError):
+        return []
+
+
+# ── Build Watchlist dual write (CRM interest + S3 watchlist) ──────────────────────
+def _company_id_by_name():
+    """{lower(name): company_id} from tracked_companies(), to join a security-interest
+    OPTION (name-keyed in load_security_maps) to a CRM company_id for S3 + pricing.
+    The interest options carry no company_id, so the join is deliberately by name."""
+    return {name.strip().lower(): cid for cid, name in tracked_companies().items()}
+
+
+def _dedup_ints(seq):
+    seen, out = set(), []
+    for x in seq:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def _crm_set_interest(person_id, side, option_ids, notify, jwt, mode="replace"):
+    """Shared CRM primitive — the ONLY place a person's interest is written, so the
+    grid and the one-off can't diverge. Sets the side's buy/sell interest field (mode
+    "replace" = exactly option_ids; "merge" = union with current) and optionally
+    Broadcast, via the exact lifted payload: PUT /people/{id}.json with
+    {"person": {"custom_fields": {FIELD: [ids], BROADCAST_FIELD: id}}}. The other side
+    is never included, so it stays untouched. Returns the call_pipeline_api result."""
+    field = BUY_INTEREST_FIELD if side == "buy" else SELL_INTEREST_FIELD
+    want = _dedup_ints(int(o) for o in option_ids)
+    if mode == "merge":
+        cur = call_pipeline_api("GET", f"/people/{person_id}.json", jwt=jwt)
+        cur_cf = cur["data"].get("custom_fields", {}) if cur.get("status") == 200 and isinstance(cur.get("data"), dict) else {}
+        new_ids = _dedup_ints(cf_id_list(cur_cf.get(field)) + want)
+    else:
+        new_ids = want
+    custom = {field: new_ids}
+    if notify is not None:
+        custom[BROADCAST_FIELD] = BROADCAST_YES if notify else BROADCAST_NO
+    res = call_pipeline_api("PUT", f"/people/{person_id}.json",
+                            {"person": {"custom_fields": custom}}, jwt=jwt)
+    if res.get("status") != 200:
+        print(f"CRM interest write failed: side={side} status={res.get('status')} {res.get('data')}")
+    return res
+
+
+def save_watchlist_selection(portfolio, person_id, side, option_ids, structures, fees,
+                             notify, jwt, mode="replace", target_price=None):
+    """The single CRM+S3 write both the Build Watchlist grid and the per-holding
+    one-off route through, so the two entry points can't diverge.
+
+    side: "buy" | "sell". option_ids: CRM interest OPTION ids (ints) for that side.
+    mode "replace" sets the side's interest to exactly option_ids (the grid is
+    pre-filled, so the checked set is the complete intended list); "merge" unions with
+    the current set (one-off adds). The OTHER side is never touched.
+
+      CRM: via _crm_set_interest (Broadcast only when notify is not None).
+      S3:  reconcile this side's watchlist rows to the resolved companies, tagged with
+           side/structures/fees (new rows carry target_price as pps_cost). A pick
+           already held annotates the holding (no dup row); a pick with no company_id
+           is CRM-only and reported under "gaps".
+
+    Returns {"crm_ok", "crm_status", "added", "removed", "annotated", "gaps"}."""
+    want = _dedup_ints(int(o) for o in option_ids)
+    res = _crm_set_interest(person_id, side, want, notify, jwt, mode)
+    crm_ok = res.get("status") == 200
+
+    # ---- S3: resolve picks to company_ids, reconcile this side's watchlist rows ----
+    sec = load_security_maps(jwt)
+    id_to_name = sec.get(side, {}).get("id_to_name", {})
+    name_to_cid = _company_id_by_name()
+    now = datetime.now(timezone.utc).isoformat()
+    holdings = portfolio.setdefault("holdings", [])
+
+    picks = {}   # company_id(str) -> {name, option_id}
+    gaps = []    # option names with no tracked company_id (CRM written, no S3 row)
+    for oid in want:
+        name = id_to_name.get(oid, f"#{oid}")
+        cid = name_to_cid.get(name.strip().lower())
+        if cid is None:
+            gaps.append(name)
+        else:
+            picks[str(cid)] = {"name": name, "option_id": oid}
+
+    added, removed, annotated = [], [], []
+
+    def _annotate(h, info):
+        h["interest_side"] = side
+        h["interest_structures"] = structures
+        h["interest_fees"] = fees
+        h["interest_option_id"] = info["option_id"]
+        h["updated_at"] = now
+
+    seen = set()
+    for h in holdings:
+        cid = str(h.get("company_id"))
+        st = _holding_status(h)
+        if st == "holding" and cid in picks:
+            _annotate(h, picks[cid]); seen.add(cid); annotated.append(picks[cid]["name"])
+        elif st == "watchlist" and h.get("side") == side:
+            if cid in picks and cid not in seen:
+                _annotate(h, picks[cid]); seen.add(cid)   # keep + refresh prefs
+            elif mode == "replace" and cid not in picks:
+                h["_drop"] = True; removed.append(h.get("company_name") or cid)
+
+    portfolio["holdings"] = [h for h in holdings if not h.get("_drop")]
+
+    for cid, info in picks.items():
+        if cid in seen:
+            continue
+        mark = company_prices().get(cid)
+        portfolio["holdings"].append({
+            "holding_id": "hld_" + uuid.uuid4().hex[:8],
+            "company_id": cid,
+            "company_name": info["name"],
+            "status": "watchlist",
+            "side": side,
+            "structures": structures,
+            "fees": fees,
+            "interest_option_id": info["option_id"],
+            "shares": None,
+            "pps_cost": target_price,
+            "price_at_add": mark["hiive_price"] if mark else None,
+            "created_at": now,
+            "updated_at": now,
+        })
+        added.append(info["name"])
+
+    return {"crm_ok": crm_ok, "crm_status": res.get("status"),
+            "added": added, "removed": removed, "annotated": annotated, "gaps": gaps}
 
 
 # ── Client action emails (Get Bids / Get Offers / Feature Request) ───────────────
@@ -708,10 +923,12 @@ function ggShowWorking(msg) {
     if (!radios.length) return;
     var shares = f.querySelector('.f-shares'), struct = f.querySelector('.f-structure'),
         date = f.querySelector('.f-date'), costLabel = f.querySelector('.cost-label'),
+        sideF = f.querySelector('.f-side'),
         costInput = f.querySelector('input[name="pps_cost"]'), btn = f.querySelector('button[type="submit"]');
     function apply() {
       var watch = (f.querySelector('input[name="status"]:checked') || {}).value === 'watchlist';
       [shares, struct, date].forEach(function (el) { if (el) el.style.display = watch ? 'none' : ''; });
+      if (sideF) sideF.style.display = watch ? '' : 'none';   // Buy/Sell only for watchlist
       if (costLabel) costLabel.textContent = watch ? 'Target Price' : 'Cost per share (Gross)';
       if (costInput) costInput.placeholder = watch ? "Price you'd buy at" : 'Original purchase price';
       if (btn) btn.textContent = watch ? 'Add to watchlist' : 'Add holding';
@@ -795,6 +1012,15 @@ def _add_form(target_id=None):
             <label>Company</label>
             <input name="company" list="company-list" required autocomplete="off"
                    placeholder="Start typing a company…">
+          </div>
+          <div class="field f-side" style="display:none">
+            <label>Interest</label>
+            <div class="seg" role="radiogroup" aria-label="Buy or sell interest">
+              <input type="radio" id="s-b-{suffix}" name="side" value="buy" checked>
+              <label for="s-b-{suffix}">Buy</label>
+              <input type="radio" id="s-s-{suffix}" name="side" value="sell">
+              <label for="s-s-{suffix}">Sell</label>
+            </div>
           </div>
           <div class="field f-structure">
             <label>Structure</label>
@@ -1186,6 +1412,122 @@ def render_admin_overview(admin_id):
     return html_response(body + EDIT_SCRIPT)
 
 
+# ── Build Watchlist grid (multi-select → CRM interest + S3 watchlist) ─────────────
+# Toggle the visible company group with the Buy/Sell radio; show a working overlay on
+# submit (the dual write does a couple of CRM round-trips).
+WL_SCRIPT = """<script>
+(function () {
+  var groups = {buy: document.getElementById('wl-group-buy'),
+                sell: document.getElementById('wl-group-sell')};
+  document.querySelectorAll('input[name="side"]').forEach(function (r) {
+    r.addEventListener('change', function () {
+      if (groups.buy)  groups.buy.style.display  = this.value === 'buy'  ? '' : 'none';
+      if (groups.sell) groups.sell.style.display = this.value === 'sell' ? '' : 'none';
+    });
+  });
+  var form = document.querySelector('form.wl-form');
+  if (form) form.addEventListener('submit', function () {
+    var b = form.querySelector('button[type="submit"]');
+    if (b) { b.disabled = true; b.textContent = 'Sending…'; }
+    var ov = document.createElement('div');
+    ov.className = 'working-overlay';
+    ov.innerHTML = '<div class="working-box"><div class="spinner"></div>'
+      + '<p>Saving your watchlist — this can take a moment. Please keep this page open.</p></div>';
+    document.body.appendChild(ov);
+  });
+})();
+</script>"""
+
+
+def render_watchlist_builder(client_id):
+    """Build Watchlist grid. Runs inside the authed portfolio session (client_id ==
+    CRM person_id), so it edits the logged-in client's own interest. Company chips come
+    from load_security_maps (the only writable set), pre-ticked from the client's
+    current CRM interest; the notify toggle reflects their Broadcast value. Degrades to
+    an empty, explained state if the CRM JWT / API can't be reached."""
+    sec = {"buy": {"id_to_name": {}}, "sell": {"id_to_name": {}}}
+    cf = {}
+    loaded = False
+    try:
+        jwt = get_jwt()
+        sec = load_security_maps(jwt)
+        person = call_pipeline_api("GET", f"/people/{client_id}.json", jwt=jwt)
+        if person.get("status") == 200 and isinstance(person.get("data"), dict):
+            cf = person["data"].get("custom_fields", {}) or {}
+        loaded = bool(sec.get("buy", {}).get("id_to_name") or sec.get("sell", {}).get("id_to_name"))
+    except Exception as e:
+        print(f"watchlist builder load failed: {e}")
+
+    cur = {"buy": set(cf_id_list(cf.get(BUY_INTEREST_FIELD))),
+           "sell": set(cf_id_list(cf.get(SELL_INTEREST_FIELD)))}
+    bc = cf_id_list(cf.get(BROADCAST_FIELD))
+    notify_on = bool(bc) and bc[0] == BROADCAST_YES
+
+    def chips(side):
+        opts = sorted(sec.get(side, {}).get("id_to_name", {}).items(), key=lambda kv: kv[1].lower())
+        if not opts:
+            return ('<p class="empty">The company list couldn’t be loaded right now. '
+                    'Please try again shortly.</p>')
+        return "".join(
+            f'<label class="wchip"><input type="checkbox" name="keep_{side}" value="{oid}"'
+            f'{" checked" if oid in cur[side] else ""}><span>{html.escape(name)}</span></label>'
+            for oid, name in opts)
+
+    def boxes(group, opts):
+        return "".join(
+            f'<label class="wbox"><input type="checkbox" name="{group}" value="{html.escape(o)}">'
+            f'<span>{html.escape(o)}</span></label>' for o in opts)
+
+    notify_attr = " checked" if notify_on else ""
+    body = f"""
+    <h1>Build your watchlist</h1>
+    <p class="subtitle">Pick the companies you're interested in — this updates your buy/sell
+    indications and your private watchlist in one step.</p>
+    <p class="wl-back"><a class="cname" href="?">&larr; Back to portfolio</a></p>
+
+    <form method="post" class="wl-form">
+      <input type="hidden" name="action" value="watchlist_save">
+
+      <div class="section">
+        <p class="section-label">I'm looking to</p>
+        <div class="seg" role="radiogroup" aria-label="Buy or sell side">
+          <input type="radio" id="wl-side-buy" name="side" value="buy" checked>
+          <label for="wl-side-buy">Buy</label>
+          <input type="radio" id="wl-side-sell" name="side" value="sell">
+          <label for="wl-side-sell">Sell</label>
+        </div>
+      </div>
+
+      <div class="section">
+        <p class="section-label">Structure</p>
+        <div class="wbox-row">{boxes("structure", WL_STRUCTURES)}</div>
+      </div>
+      <div class="section">
+        <p class="section-label">Fees</p>
+        <div class="wbox-row">{boxes("fee", WL_FEES)}</div>
+      </div>
+
+      <div class="section wl-side-group" id="wl-group-buy">
+        <p class="section-label">Companies — looking to buy</p>
+        <div class="wchip-row">{chips("buy")}</div>
+      </div>
+      <div class="section wl-side-group" id="wl-group-sell" style="display:none">
+        <p class="section-label">Companies — looking to sell</p>
+        <div class="wchip-row">{chips("sell")}</div>
+      </div>
+
+      <label class="wnotify"><input type="checkbox" name="notify" value="yes"{notify_attr}>
+        Email me when matching deals become available</label>
+
+      <div class="add-actions">
+        <button type="submit" class="btn-primary">Send Watchlist</button>
+        <a class="navbtn" href="?">Cancel</a>
+      </div>
+    </form>
+    <p class="note">A live list of deals matching your picks will appear here in a future update.</p>"""
+    return html_response(body + WL_SCRIPT)
+
+
 # ── HTML shell ───────────────────────────────────────────────────────────────────
 # Quiet top nav back to the main Gracia Group properties. Same-tab links; the
 # session cookie persists, so a client can leave and return without re-auth.
@@ -1195,6 +1537,7 @@ TOPNAV_HTML = """
         <a class="navbtn brand" href="https://www.graciagroup.com">Gracia Group</a>
       </div>
       <div class="navgroup">
+        <a class="navbtn" href="?view=watchlist">Build Watchlist</a>
         <a class="navbtn" href="https://trades.graciagroup.com/">Indications</a>
         <button class="navbtn navbtn-soon" type="button" disabled title="Coming soon">Download PDF</button>
       </div>
@@ -1300,6 +1643,16 @@ def html_response(body_html, status=200):
     /* Watchlist section + "at/below target" highlight. */
     .wl-head {{ margin-top: 34px; }}
     td.wl-hit {{ color: var(--pos); font-weight: 700; }}
+    /* Build Watchlist grid */
+    .wl-form .section {{ margin-bottom: 22px; }}
+    .wl-back {{ margin: -10px 0 20px; font-size: 13px; }}
+    .section-label {{ font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 10px; }}
+    .wchip-row, .wbox-row {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+    .wchip, .wbox {{ display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px; border: 1px solid var(--line); border-radius: 999px; font-size: 13px; color: var(--muted); background: #fff; cursor: pointer; user-select: none; }}
+    .wchip input, .wbox input {{ accent-color: var(--accent); margin: 0; }}
+    .wchip:has(input:checked), .wbox:has(input:checked) {{ border-color: var(--accent); color: var(--ink); background: var(--bg); }}
+    .wnotify {{ display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink); margin: 8px 0 4px; cursor: pointer; }}
+    .wnotify input {{ accent-color: var(--accent); }}
     .table-wrap {{ overflow-x: auto; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
     th {{
@@ -1497,6 +1850,15 @@ def _parse_body(event):
     return {k: v[0] for k, v in urllib.parse.parse_qs(body).items()}
 
 
+def _parse_body_multi(event):
+    """parse_qs without collapsing repeats — for the Build Watchlist grid, whose
+    checkbox groups submit many keep_buy / keep_sell / structure / fee values."""
+    body = event.get("body") or ""
+    if event.get("isBase64Encoded"):
+        body = base64.b64decode(body).decode("utf-8")
+    return urllib.parse.parse_qs(body)
+
+
 def lambda_handler(event, context):
     method = (event.get("requestContext", {}).get("http", {}).get("method") or "GET").upper()
     raw_path = event.get("rawPath", "/")
@@ -1583,6 +1945,29 @@ def lambda_handler(event, context):
             invited["invited_email"] = email
             save_portfolio(invited)
             return _json_ok()
+        # Build Watchlist grid submit: dual write (CRM interest + S3 watchlist) for the
+        # logged-in client's OWN portfolio. Uses the multi-value parse so the checkbox
+        # groups aren't collapsed.
+        if action == "watchlist_save":
+            try:
+                jwt = get_jwt()
+            except Exception as e:
+                print(f"watchlist_save: jwt load failed: {e}")
+                return {"statusCode": 303,
+                        "headers": {"Location": raw_path + "?view=watchlist"}, "body": ""}
+            multi = _parse_body_multi(event)
+            side = form.get("side") if form.get("side") in ("buy", "sell") else "buy"
+            keep = [int(v) for v in multi.get(f"keep_{side}", [])
+                    if v.strip().lstrip("-").isdigit()]
+            structures = [s for s in multi.get("structure", []) if s in WL_STRUCTURES]
+            fees = [f for f in multi.get("fee", []) if f in WL_FEES]
+            notify = form.get("notify") == "yes"
+            own = load_portfolio(client_id)
+            own.setdefault("client_id", client_id)
+            save_watchlist_selection(own, client_id, side, keep, structures, fees,
+                                     notify, jwt, mode="replace")
+            save_portfolio(own)
+            return {"statusCode": 303, "headers": {"Location": raw_path}, "body": ""}
         if action == "remove":
             remove_holding(portfolio, form.get("holding_id", ""))
         elif action == "update":
@@ -1591,10 +1976,27 @@ def lambda_handler(event, context):
             convert_holding(portfolio, form.get("holding_id", ""), form)
         else:
             add_holding(portfolio, form)
+            # One-off "add to watchlist": route the CRM interest write through the SAME
+            # primitive the grid uses (merge — add this one company to the side), so the
+            # two entry points can't diverge. add_holding already wrote the S3 row.
+            if form.get("status") == "watchlist" and not (target and is_admin):
+                side = form.get("side") if form.get("side") in ("buy", "sell") else "buy"
+                name_in = (form.get("company") or "").strip().lower()
+                try:
+                    jwt = get_jwt()
+                    oid = load_security_maps(jwt).get(side, {}).get("name_to_id", {}).get(name_in)
+                    if oid is not None:
+                        _crm_set_interest(client_id, side, [oid], None, jwt, mode="merge")
+                    else:
+                        print(f"one-off watchlist: '{name_in}' has no CRM interest option; S3 only")
+                except Exception as e:
+                    print(f"one-off watchlist CRM sync failed (S3 row kept): {e}")
         save_portfolio(portfolio)
         # Post/Redirect/Get so a refresh doesn't resubmit the form.
         return {"statusCode": 303, "headers": {"Location": raw_path}, "body": ""}
 
+    if qs.get("view") == "watchlist":
+        return render_watchlist_builder(client_id)
     if is_admin:
         return render_admin_overview(client_id)
     return render_portfolio(load_portfolio(client_id), is_admin)
