@@ -1445,6 +1445,24 @@ WL_SCRIPT = """<script>
       + '<p>Saving your watchlist — this can take a moment. Please keep this page open.</p></div>';
     document.body.appendChild(ov);
   });
+
+  // Cancel: confirm before discarding, then announce the return to Holdings.
+  var cancel = document.querySelector('.wl-cancel');
+  if (cancel) cancel.addEventListener('click', function () {
+    var ov = document.createElement('div');
+    ov.className = 'working-overlay';
+    ov.innerHTML = '<div class="working-box wl-modal">'
+      + '<p class="wl-modal-h">Returning to Holdings</p>'
+      + '<p class="wl-modal-sub">Any picks you have not added yet will not be kept.</p>'
+      + '<div class="wl-modal-acts">'
+      + '<button type="button" class="btn-primary" id="wl-go">Return to Holdings</button>'
+      + '<button type="button" class="navbtn" id="wl-stay">Keep editing</button>'
+      + '</div></div>';
+    document.body.appendChild(ov);
+    document.getElementById('wl-go').addEventListener('click', function () { window.location.href = '?'; });
+    document.getElementById('wl-stay').addEventListener('click', function () { ov.parentNode.removeChild(ov); });
+    ov.addEventListener('click', function (e) { if (e.target === ov) ov.parentNode.removeChild(ov); });
+  });
 })();
 </script>"""
 
@@ -1532,12 +1550,16 @@ def render_watchlist_builder(client_id):
       </div>
 
       <div class="section">
-        <p class="section-label">Structure</p>
-        <div class="wbox-row">{boxes("structure", WL_STRUCTURES, pre={"Direct", "Fund"})}</div>
-      </div>
-      <div class="section">
-        <p class="section-label">Fees</p>
-        <div class="wbox-row">{boxes("fee", WL_FEES)}</div>
+        <div class="wl-pref-row">
+          <div class="wl-pref">
+            <p class="section-label">Structure</p>
+            <div class="wbox-row">{boxes("structure", WL_STRUCTURES, pre={"Direct", "Fund"})}</div>
+          </div>
+          <div class="wl-pref">
+            <p class="section-label">Fees</p>
+            <div class="wbox-row">{boxes("fee", WL_FEES)}</div>
+          </div>
+        </div>
       </div>
 
       <div class="section wl-side-group" id="wl-group-buy">
@@ -1549,15 +1571,19 @@ def render_watchlist_builder(client_id):
         {chips("sell")}
       </div>
 
-      <label class="wnotify"><input type="checkbox" name="notify" value="yes"{notify_attr}>
-        Email me when matching deals become available</label>
+      <label class="wl-notify">
+        <input type="checkbox" name="notify" value="yes"{notify_attr}>
+        <span class="wl-notify-text">
+          <strong>Email me about matching deals</strong>
+          <small>We'll let you know when a buyer or seller turns up for one of your picks.</small>
+        </span>
+      </label>
 
       <div class="add-actions">
         <button type="submit" class="btn-primary">Add to Watchlist</button>
-        <a class="navbtn" href="?">Cancel</a>
+        <button type="button" class="navbtn wl-cancel">Cancel</button>
       </div>
-    </form>
-    <p class="note">A live list of deals matching your picks will appear here in a future update.</p>"""
+    </form>"""
     return html_response(body + WL_SCRIPT)
 
 
@@ -1691,8 +1717,22 @@ def html_response(body_html, status=200):
     .wl-search {{ flex: 1; padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }}
     .wl-showall {{ border: 1px solid var(--line); background: #fff; color: var(--muted); border-radius: 8px; padding: 7px 12px; font-size: 12px; cursor: pointer; white-space: nowrap; }}
     .wl-hint {{ font-size: 12px; color: var(--muted); margin: 0 0 8px; }}
-    .wnotify {{ display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink); margin: 8px 0 4px; cursor: pointer; }}
-    .wnotify input {{ accent-color: var(--accent); }}
+    /* Structure + Fees side by side on one line */
+    .wl-pref-row {{ display: flex; flex-wrap: wrap; gap: 16px 48px; }}
+    .wl-pref {{ flex: 1 1 auto; }}
+    /* Notify, as a tidy toggle card just above the actions */
+    .wl-notify {{ display: flex; align-items: flex-start; gap: 11px; padding: 14px 16px; margin: 4px 0 6px;
+      border: 1px solid var(--line); border-radius: 10px; background: var(--bg); cursor: pointer; }}
+    .wl-notify input {{ accent-color: var(--accent); margin-top: 2px; width: 16px; height: 16px; flex: none; }}
+    .wl-notify-text {{ display: flex; flex-direction: column; gap: 2px; }}
+    .wl-notify-text strong {{ font-size: 14px; color: var(--ink); font-weight: 600; }}
+    .wl-notify-text small {{ font-size: 12px; color: var(--muted); }}
+    .wl-notify:has(input:checked) {{ border-color: var(--accent); background: #fff; }}
+    /* Cancel confirmation popup */
+    .wl-modal {{ max-width: 380px; text-align: center; }}
+    .wl-modal-h {{ font-family: 'Fraunces', Georgia, serif; font-size: 18px; font-weight: 600; margin-bottom: 6px; }}
+    .wl-modal-sub {{ font-size: 13px; color: var(--muted); margin-bottom: 18px; line-height: 1.5; }}
+    .wl-modal-acts {{ display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }}
     .table-wrap {{ overflow-x: auto; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
     th {{
