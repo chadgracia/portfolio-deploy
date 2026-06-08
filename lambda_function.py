@@ -916,28 +916,6 @@ function ggShowWorking(msg) {
   });
 })();
 (function () {
-  // Segmented Holding|Watchlist toggle morphs each add form: in watchlist mode hide
-  // Shares / Structure / Transaction date and relabel Cost -> Target Price.
-  document.querySelectorAll('form.addform').forEach(function (f) {
-    var radios = f.querySelectorAll('input[name="status"]');
-    if (!radios.length) return;
-    var shares = f.querySelector('.f-shares'), struct = f.querySelector('.f-structure'),
-        date = f.querySelector('.f-date'), costLabel = f.querySelector('.cost-label'),
-        sideF = f.querySelector('.f-side'),
-        costInput = f.querySelector('input[name="pps_cost"]'), btn = f.querySelector('button[type="submit"]');
-    function apply() {
-      var watch = (f.querySelector('input[name="status"]:checked') || {}).value === 'watchlist';
-      [shares, struct, date].forEach(function (el) { if (el) el.style.display = watch ? 'none' : ''; });
-      if (sideF) sideF.style.display = watch ? '' : 'none';   // Buy/Sell only for watchlist
-      if (costLabel) costLabel.textContent = watch ? 'Target Price' : 'Cost per share (Gross)';
-      if (costInput) costInput.placeholder = watch ? "Price you'd buy at" : 'Original purchase price';
-      if (btn) btn.textContent = watch ? 'Add to watchlist' : 'Add holding';
-    }
-    radios.forEach(function (r) { r.addEventListener('change', apply); });
-    apply();
-  });
-})();
-(function () {
   // "I bought this" — convert a watchlist item to a holding, prompting for shares.
   document.querySelectorAll('.convert-btn').forEach(function (b) {
     b.addEventListener('click', function () {
@@ -992,13 +970,10 @@ INVITE_PANEL_HTML = """
 
 
 def _add_form(target_id=None):
-    """Add a holding OR a watchlist item. A segmented Holding|Watchlist toggle
-    (Holding selected by default) morphs the fields via JS: in watchlist mode Shares,
-    Structure and Transaction date hide and 'Cost per share' relabels to 'Target
-    Price'. pps_cost stores the cost basis (holding) or the target price (watchlist).
+    """Add a holding. Watchlist/buy-sell interest is handled separately on the Build
+    Watchlist page, so this form is holdings-only — pps_cost is the cost basis.
     target_id (admin roll-up) scopes the write to that client; None = own portfolio.
     The company datalist (id 'company-list') is emitted once per page by the caller."""
-    suffix = html.escape(str(target_id)) if target_id else "self"
     structure_opts = "".join(f'<option>{s}</option>' for s in STRUCTURES)
     target_hidden = (f'<input type="hidden" name="target_client_id" value="{html.escape(str(target_id))}">'
                      if target_id else "")
@@ -1012,15 +987,6 @@ def _add_form(target_id=None):
             <label>Company</label>
             <input name="company" list="company-list" required autocomplete="off"
                    placeholder="Start typing a company…">
-          </div>
-          <div class="field f-side" style="display:none">
-            <label>Interest</label>
-            <div class="seg" role="radiogroup" aria-label="Buy or sell interest">
-              <input type="radio" id="s-b-{suffix}" name="side" value="buy" checked>
-              <label for="s-b-{suffix}">Buy</label>
-              <input type="radio" id="s-s-{suffix}" name="side" value="sell">
-              <label for="s-s-{suffix}">Sell</label>
-            </div>
           </div>
           <div class="field f-structure">
             <label>Structure</label>
@@ -1040,19 +1006,13 @@ def _add_form(target_id=None):
           </div>
         </div>
         <div class="add-actions">
-          <div class="seg" role="radiogroup" aria-label="Add as holding or watchlist">
-            <input type="radio" id="m-h-{suffix}" name="status" value="holding" checked>
-            <label for="m-h-{suffix}">Holding</label>
-            <input type="radio" id="m-w-{suffix}" name="status" value="watchlist">
-            <label for="m-w-{suffix}">Watchlist</label>
-          </div>
           <button type="submit" class="btn-primary">Add holding</button>
         </div>
       </form>
     </div>"""
 
 
-def _watchlist_table(items, target_id=None, show_client_actions=True):
+def _watchlist_table(items, target_id=None, show_client_actions=True, with_head=True):
     """Watchlist ('tracking to buy') table: Company, Target Price (inline-editable),
     LR, Market Price, Recent Developments, actions. Never counted in portfolio totals.
     The Market Price cell turns green when it has reached / fallen below the Target
@@ -1090,9 +1050,11 @@ def _watchlist_table(items, target_id=None, show_client_actions=True):
           {cat_cell}
           <td class="acts">{acts}</td>
         </tr>"""
-    return f"""
+    head = ("""
     <h2 class="wl-head">Watchlist</h2>
-    <p class="subtitle">Companies you're tracking to buy — the market price turns green when it reaches your target.</p>
+    <p class="subtitle">Companies you're tracking to buy — the market price turns green when it reaches your target.</p>"""
+            if with_head else "")
+    return f"""{head}
     <div class="table-wrap">
     <table>
       <thead>
@@ -1191,12 +1153,25 @@ def render_portfolio(portfolio, is_admin=False):
         f'<option value="{html.escape(label)}"></option>'
         for label in picker_index()
     )
-    watchlist_section = _watchlist_table(watch, show_client_actions=True) if watch else ""
+    build_btn = '<a class="btn-secondary" href="?view=watchlist">+ Build / edit watchlist</a>'
+    if watch:
+        wl_body = _watchlist_table(watch, show_client_actions=True, with_head=False)
+    else:
+        wl_body = ('<p class="empty-state">You\'re not tracking any companies yet. '
+                   'Build a watchlist to get buy/sell market updates and tell us what you\'re looking for.</p>')
+    watchlist_section = f"""
+    <div class="section-head">
+      <h2>Watchlist</h2>
+      {build_btn}
+    </div>
+    <p class="subtitle">Companies you're tracking to buy — the market price turns green when it reaches your target.</p>
+    {wl_body}"""
 
     body = f"""
     <h1>{html.escape(title)}</h1>
     <p class="subtitle">Indicative valuations against the latest market-price estimate.</p>
 
+    <h2 class="sec">Holdings</h2>
     <div class="table-wrap">
     <table>
       <thead>
@@ -1217,7 +1192,7 @@ def render_portfolio(portfolio, is_admin=False):
 
     {watchlist_section}
 
-    <h2>Add to your portfolio</h2>
+    <h2 class="sec">Add a holding</h2>
     <datalist id="company-list">{options}</datalist>
     {_add_form()}
 
@@ -1576,7 +1551,7 @@ def render_watchlist_builder(client_id):
         Email me when matching deals become available</label>
 
       <div class="add-actions">
-        <button type="submit" class="btn-primary">Send Watchlist</button>
+        <button type="submit" class="btn-primary">Add to Watchlist</button>
         <a class="navbtn" href="?">Cancel</a>
       </div>
     </form>
@@ -1767,6 +1742,20 @@ def html_response(body_html, status=200):
       border-radius: 9px; font-size: 15px; font-weight: 600; cursor: pointer; width: auto;
     }}
     .btn-primary:hover {{ opacity: 0.9; }}
+    /* Clear section structure: Holdings / Watchlist / Add a holding */
+    h2.sec {{ margin-top: 40px; }}
+    .section-head {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 40px; margin-bottom: 4px; }}
+    .section-head h2 {{ margin-bottom: 0; }}
+    .btn-secondary {{
+      display: inline-block; background: var(--bg); color: var(--ink); text-decoration: none;
+      border: 1px solid var(--line); padding: 8px 14px; border-radius: 8px;
+      font-size: 13px; font-weight: 600; white-space: nowrap;
+    }}
+    .btn-secondary:hover {{ border-color: var(--accent); color: var(--accent); }}
+    .empty-state {{
+      border: 1px dashed var(--line); border-radius: 10px; padding: 20px;
+      color: var(--muted); font-size: 14px; line-height: 1.5; background: var(--bg);
+    }}
     @media (max-width: 600px) {{ .grid {{ grid-template-columns: 1fr; }} .card {{ padding: 24px; }} }}
     .editable {{ display: inline-block; width: 100%; cursor: pointer; border-bottom: 1px dashed transparent; }}
     .editable:hover {{ border-bottom-color: var(--muted); }}
@@ -2039,21 +2028,6 @@ def lambda_handler(event, context):
             convert_holding(portfolio, form.get("holding_id", ""), form)
         else:
             add_holding(portfolio, form)
-            # One-off "add to watchlist": route the CRM interest write through the SAME
-            # primitive the grid uses (merge — add this one company to the side), so the
-            # two entry points can't diverge. add_holding already wrote the S3 row.
-            if form.get("status") == "watchlist" and not (target and is_admin):
-                side = form.get("side") if form.get("side") in ("buy", "sell") else "buy"
-                name_in = (form.get("company") or "").strip().lower()
-                try:
-                    jwt = get_jwt()
-                    oid = load_security_maps(jwt).get(side, {}).get("name_to_id", {}).get(name_in)
-                    if oid is not None:
-                        _crm_set_interest(client_id, side, [oid], None, jwt, mode="merge")
-                    else:
-                        print(f"one-off watchlist: '{name_in}' has no CRM interest option; S3 only")
-                except Exception as e:
-                    print(f"one-off watchlist CRM sync failed (S3 row kept): {e}")
         save_portfolio(portfolio)
         # Post/Redirect/Get so a refresh doesn't resubmit the form.
         return {"statusCode": 303, "headers": {"Location": raw_path}, "body": ""}
