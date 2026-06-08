@@ -1190,11 +1190,13 @@ def render_portfolio(portfolio, is_admin=False):
     not a Rainmaker Securities valuation, and reflects the as-of date shown on hover. Figures
     are for tracking only and are not an offer, a quote, or investment advice.</p>
 
-    {watchlist_section}
-
-    <h2 class="sec">Add a holding</h2>
     <datalist id="company-list">{options}</datalist>
-    {_add_form()}
+    <details class="add-holding">
+      <summary class="btn-secondary add-toggle">+ Add a holding</summary>
+      {_add_form()}
+    </details>
+
+    {watchlist_section}
 
     <div class="feedback">
       <h2>Feature Request</h2>
@@ -1756,6 +1758,13 @@ def html_response(body_html, status=200):
       border: 1px dashed var(--line); border-radius: 10px; padding: 20px;
       color: var(--muted); font-size: 14px; line-height: 1.5; background: var(--bg);
     }}
+    /* Collapsed add-holding: the summary IS the button; fields reveal on click. */
+    .add-holding {{ margin-top: 28px; }}
+    .add-holding > summary {{ list-style: none; cursor: pointer; width: auto; }}
+    .add-holding > summary::-webkit-details-marker {{ display: none; }}
+    .add-holding > summary::marker {{ content: ""; }}
+    .add-holding[open] > summary {{ margin-bottom: 16px; }}
+    .add-holding .add {{ margin-top: 0; }}
     @media (max-width: 600px) {{ .grid {{ grid-template-columns: 1fr; }} .card {{ padding: 24px; }} }}
     .editable {{ display: inline-block; width: 100%; cursor: pointer; border-bottom: 1px dashed transparent; }}
     .editable:hover {{ border-bottom-color: var(--muted); }}
