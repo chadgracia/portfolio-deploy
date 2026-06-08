@@ -1425,6 +1425,39 @@ WL_SCRIPT = """<script>
       if (groups.sell) groups.sell.style.display = this.value === 'sell' ? '' : 'none';
     });
   });
+  // Per side: default to highlighted (recent-activity) companies; the search box
+  // reveals matches across ALL companies, and "Show all" drops the filter. Checked
+  // companies always stay visible so a selection can't be hidden out of the form.
+  function setupSide(side) {
+    var row = document.getElementById('wl-chips-' + side);
+    if (!row) return;
+    var chips = Array.prototype.slice.call(row.querySelectorAll('.wchip'));
+    var search = document.querySelector('.wl-search[data-side="' + side + '"]');
+    var btn = document.querySelector('.wl-showall[data-side="' + side + '"]');
+    var hint = document.querySelector('.wl-hint[data-side="' + side + '"]');
+    var showAll = false;
+    function apply() {
+      var q = search ? search.value.trim().toLowerCase() : '';
+      chips.forEach(function (chip) {
+        var cb = chip.querySelector('input');
+        var match = chip.getAttribute('data-name').indexOf(q) !== -1;
+        var show = cb.checked || (q ? match : (showAll || chip.getAttribute('data-hl') === '1'));
+        chip.style.display = show ? '' : 'none';
+      });
+      if (hint) hint.style.display = (q || showAll) ? 'none' : '';
+    }
+    if (search) search.addEventListener('input', apply);
+    if (btn) btn.addEventListener('click', function () {
+      showAll = !showAll;
+      btn.textContent = showAll ? 'Show highlighted' : 'Show all';
+      apply();
+    });
+    row.addEventListener('change', apply);
+    apply();
+  }
+  setupSide('buy');
+  setupSide('sell');
+
   var form = document.querySelector('form.wl-form');
   if (form) form.addEventListener('submit', function () {
     var b = form.querySelector('button[type="submit"]');
@@ -1462,21 +1495,44 @@ def render_watchlist_builder(client_id):
            "sell": set(cf_id_list(cf.get(SELL_INTEREST_FIELD)))}
     bc = cf_id_list(cf.get(BROADCAST_FIELD))
     notify_on = bool(bc) and bc[0] == BROADCAST_YES
+    cats = company_catalysts()            # company_ids with a Catalyst = "highlighted"
+    name_to_cid = _company_id_by_name()
 
     def chips(side):
         opts = sorted(sec.get(side, {}).get("id_to_name", {}).items(), key=lambda kv: kv[1].lower())
-        if not opts:
+        rows, n_hl = [], 0
+        for oid, name in opts:
+            picked = oid in cur[side]
+            # "$" tags a company that already went public — drop it, unless it's
+            # already on the client's list (so a save can't silently remove it).
+            if "$" in name and not picked:
+                continue
+            cid = name_to_cid.get(name.strip().lower())
+            hl = bool(cid and cid in cats)
+            if hl:
+                n_hl += 1
+            rows.append(
+                f'<label class="wchip" data-name="{html.escape(name.lower(), quote=True)}" '
+                f'data-hl="{1 if hl else 0}"><input type="checkbox" name="keep_{side}" '
+                f'value="{oid}"{" checked" if picked else ""}><span>{html.escape(name)}</span></label>')
+        if not rows:
             return ('<p class="empty">The company list couldn’t be loaded right now. '
                     'Please try again shortly.</p>')
-        return "".join(
-            f'<label class="wchip"><input type="checkbox" name="keep_{side}" value="{oid}"'
-            f'{" checked" if oid in cur[side] else ""}><span>{html.escape(name)}</span></label>'
-            for oid, name in opts)
+        chips_html = "".join(rows)
+        return (
+            f'<div class="wl-tools">'
+            f'<input type="text" class="wl-search" data-side="{side}" autocomplete="off" '
+            f'placeholder="Search all companies…">'
+            f'<button type="button" class="wl-showall" data-side="{side}">Show all</button>'
+            f'</div>'
+            f'<p class="wl-hint" data-side="{side}">Showing {n_hl} companies with recent activity — '
+            f'search or “Show all” for the full list.</p>'
+            f'<div class="wchip-row" id="wl-chips-{side}">{chips_html}</div>')
 
-    def boxes(group, opts):
+    def boxes(group, opts, pre=()):
         return "".join(
-            f'<label class="wbox"><input type="checkbox" name="{group}" value="{html.escape(o)}">'
-            f'<span>{html.escape(o)}</span></label>' for o in opts)
+            f'<label class="wbox"><input type="checkbox" name="{group}" value="{html.escape(o)}"'
+            f'{" checked" if o in pre else ""}><span>{html.escape(o)}</span></label>' for o in opts)
 
     notify_attr = " checked" if notify_on else ""
     body = f"""
@@ -1500,7 +1556,7 @@ def render_watchlist_builder(client_id):
 
       <div class="section">
         <p class="section-label">Structure</p>
-        <div class="wbox-row">{boxes("structure", WL_STRUCTURES)}</div>
+        <div class="wbox-row">{boxes("structure", WL_STRUCTURES, pre={"Direct", "Fund"})}</div>
       </div>
       <div class="section">
         <p class="section-label">Fees</p>
@@ -1509,11 +1565,11 @@ def render_watchlist_builder(client_id):
 
       <div class="section wl-side-group" id="wl-group-buy">
         <p class="section-label">Companies — looking to buy</p>
-        <div class="wchip-row">{chips("buy")}</div>
+        {chips("buy")}
       </div>
       <div class="section wl-side-group" id="wl-group-sell" style="display:none">
         <p class="section-label">Companies — looking to sell</p>
-        <div class="wchip-row">{chips("sell")}</div>
+        {chips("sell")}
       </div>
 
       <label class="wnotify"><input type="checkbox" name="notify" value="yes"{notify_attr}>
@@ -1647,10 +1703,17 @@ def html_response(body_html, status=200):
     .wl-form .section {{ margin-bottom: 22px; }}
     .wl-back {{ margin: -10px 0 20px; font-size: 13px; }}
     .section-label {{ font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 10px; }}
-    .wchip-row, .wbox-row {{ display: flex; flex-wrap: wrap; gap: 8px; }}
-    .wchip, .wbox {{ display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px; border: 1px solid var(--line); border-radius: 999px; font-size: 13px; color: var(--muted); background: #fff; cursor: pointer; user-select: none; }}
-    .wchip input, .wbox input {{ accent-color: var(--accent); margin: 0; }}
+    .wbox-row {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+    .wchip-row {{ display: flex; flex-wrap: wrap; gap: 5px; }}
+    .wbox {{ display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px; border: 1px solid var(--line); border-radius: 999px; font-size: 13px; color: var(--muted); background: #fff; cursor: pointer; user-select: none; }}
+    .wchip {{ display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; line-height: 1.5; color: var(--muted); background: #fff; cursor: pointer; user-select: none; }}
+    .wchip input {{ accent-color: var(--accent); margin: 0; width: 12px; height: 12px; flex: none; }}
+    .wbox input {{ accent-color: var(--accent); margin: 0; }}
     .wchip:has(input:checked), .wbox:has(input:checked) {{ border-color: var(--accent); color: var(--ink); background: var(--bg); }}
+    .wl-tools {{ display: flex; gap: 8px; margin-bottom: 8px; }}
+    .wl-search {{ flex: 1; padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }}
+    .wl-showall {{ border: 1px solid var(--line); background: #fff; color: var(--muted); border-radius: 8px; padding: 7px 12px; font-size: 12px; cursor: pointer; white-space: nowrap; }}
+    .wl-hint {{ font-size: 12px; color: var(--muted); margin: 0 0 8px; }}
     .wnotify {{ display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink); margin: 8px 0 4px; cursor: pointer; }}
     .wnotify input {{ accent-color: var(--accent); }}
     .table-wrap {{ overflow-x: auto; }}
