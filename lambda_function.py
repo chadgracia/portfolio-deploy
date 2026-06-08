@@ -74,6 +74,11 @@ STRUCTURES = ["Direct", "Fund/SPV", "Forward", "Unknown", "None"]
 # Structures where shares x underlying mark is NOT a clean position value
 INDIRECT_STRUCTURES = {"Fund/SPV", "Forward"}
 
+# Holding `status` values written by the app (add_holding / convert_holding / the
+# add-form radios). Records written before this field existed lack it entirely;
+# _holding_status() below supplies the value and infers a default for those.
+VALID_STATUSES = {"holding", "watchlist"}
+
 
 # ── Company master list (Pipeline CRM mirror in S3) ──────────────────────────────
 # The tracked universe = Pipeline companies of Org. Type "Traded Issuer" (id 5103523),
@@ -333,8 +338,25 @@ def convert_holding(portfolio, holding_id, form):
         h["status"] = "holding"
         if (form.get("shares") or "").strip():
             h["shares"] = _to_float(form.get("shares"))
+        # Capture the entry mark at the move-to-holdings step if we never got one at
+        # add time (e.g. the company had no Hiive Price when it was first watchlisted).
+        # Don't clobber an existing snapshot.
+        if h.get("price_at_add") is None:
+            info = company_prices().get(h.get("company_id"))
+            h["price_at_add"] = info["hiive_price"] if info else None
         h["updated_at"] = datetime.now(timezone.utc).isoformat()
         break
+
+
+def _holding_status(h):
+    """The holding's status, tolerant of records written before the field existed.
+    Explicit valid value wins; otherwise infer — a position with shares is a
+    "holding", one without is a "watchlist" entry. Never raises / never returns an
+    unexpected value, so legacy files render instead of dropping or throwing."""
+    s = h.get("status")
+    if s in VALID_STATUSES:
+        return s
+    return "holding" if h.get("shares") is not None else "watchlist"
 
 
 def update_holding(portfolio, holding_id, form):
@@ -860,8 +882,8 @@ def _watchlist_table(items, target_id=None, show_client_actions=True):
 
 def render_portfolio(portfolio, is_admin=False):
     all_items = portfolio.get("holdings", [])
-    held = [h for h in all_items if h.get("status") != "watchlist"]
-    watch = [h for h in all_items if h.get("status") == "watchlist"]
+    held = [h for h in all_items if _holding_status(h) != "watchlist"]
+    watch = [h for h in all_items if _holding_status(h) == "watchlist"]
     title = portfolio.get("display_name") or "Your portfolio"
     invite_panel = INVITE_PANEL_HTML if is_admin else ""
     rows = ""
@@ -996,7 +1018,7 @@ def _admin_holdings_table(portfolio, target_id):
     inline-editable and each row carries a remove (×) form, all tagged with target_id
     so writes land on that client. 9 cols (trailing column holds the remove button).
     Watchlist items are excluded here — they render in their own _watchlist_table."""
-    holdings = [h for h in portfolio.get("holdings", []) if h.get("status") != "watchlist"]
+    holdings = [h for h in portfolio.get("holdings", []) if _holding_status(h) != "watchlist"]
     rows = ""
     tot_current = tot_cost = 0.0
     have_any_value = False
@@ -1132,8 +1154,8 @@ def render_admin_overview(admin_id):
         id_html = (f'<a class="pd-id" href="{html.escape(pd_url)}" target="_blank" rel="noopener">'
                    f'Client ID {html.escape(str(cid))}</a>')
         items = portfolio.get("holdings", [])
-        held = [h for h in items if h.get("status") != "watchlist"]
-        watch = [h for h in items if h.get("status") == "watchlist"]
+        held = [h for h in items if _holding_status(h) != "watchlist"]
+        watch = [h for h in items if _holding_status(h) == "watchlist"]
         table_html = (_admin_holdings_table(portfolio, cid)
                       if held else '<p class="empty">(no holdings yet)</p>')
         watch_html = _watchlist_table(watch, target_id=cid, show_client_actions=False) if watch else ""
