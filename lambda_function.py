@@ -2067,7 +2067,13 @@ def render_watchlist_status(client_id):
     if not isinstance(deals, list):
         deals = []
 
-    meta = _wl_company_meta(sides["buy"] + sides["sell"], jwt)
+    _wl_seen, _wl_uniq = set(), []
+    for _n in sides["buy"] + sides["sell"]:
+        _k = _n.strip().lower()
+        if _k not in _wl_seen:
+            _wl_seen.add(_k)
+            _wl_uniq.append(_n)
+    meta = _wl_company_meta(_wl_uniq, jwt)
 
     def _num(v):
         try:
