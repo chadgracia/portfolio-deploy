@@ -2118,9 +2118,9 @@ def render_watchlist_status(client_id):
                         + (f'<td class="wl-co" rowspan="{len(live)}">{safe_cell}</td>' if first else "")
                         + f'<td>{html.escape(d.get("structure") or "")}</td>'
                         + f'<td>{_wl_pps(price)}</td>'
-                        + f'<td>{_wl_money(d.get("min_deal_size"))} &ndash; {_wl_money(d.get("max_deal_size"))}</td>'
                         + f'<td>{lr_cell}</td>'
                         + f'<td>{prem_cell}</td>'
+                        + f'<td>{_wl_money(d.get("min_deal_size"))} &ndash; {_wl_money(d.get("max_deal_size"))}</td>'
                         + f'<td><a class="wl-act" href="{WL_DEAL_URL}?deal_id={did}">View deal &rarr;</a></td>'
                         + "</tr>"
                     )
@@ -2140,7 +2140,7 @@ def render_watchlist_status(client_id):
                          f'<td><a class="wl-act" href="{bid}">Submit a bid &rarr;</a></td></tr>')
         return (f'<h2 class="wl-h2">{label}</h2><div class="wl-wrap"><table class="wl-table">'
                 '<thead><tr><th>Company</th><th>Structure</th><th>Price</th>'
-                '<th>Size</th><th>LR PPS</th><th>vs LR</th><th></th></tr></thead>'
+                '<th>LR PPS</th><th>vs LR</th><th>Size</th><th></th></tr></thead>'
                 f'<tbody>{rows}</tbody></table></div>')
 
     body = block("buy", sides["buy"]) + block("sell", sides["sell"])
@@ -2194,8 +2194,6 @@ def render_watchlist_status(client_id):
     <style>
       .wl-spacer {{ display: none; }}
     </style>
-    <h1>Your Watchlist</h1>
-    <p class="sub">Live status for the companies you're following.</p>
     {body}
     """)
 
