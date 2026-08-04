@@ -1837,7 +1837,7 @@ def html_response(body_html, status=200):
 <body>
   <div class="card">
     {TOPNAV_HTML}
-    <div class="logo">Private Portfolio Snapshot &amp; Tracker</div>
+    <div class="logo">Private Secondaries Watchlist</div>
     {body_html}
     {DISCLOSURE_HTML}
   </div>
@@ -2106,8 +2106,7 @@ def render_watchlist_status(client_id):
                     did = html.escape(str(d.get("id") or ""), quote=True)
                     price = _num(d.get("net")) or _num(d.get("gross"))
                     lr_pps = _num(d.get("company_lr_pps"))
-                    lr_val = _num(d.get("company_lr_val"))
-                    lr_cell = f"${lr_val:,.2f}B" if lr_val else "&ndash;"
+                    lr_cell = _wl_pps(lr_pps) if lr_pps else "&ndash;"
                     if price and lr_pps and lr_pps > 0:
                         prem = (price / lr_pps - 1.0) * 100.0
                         cls = "wl-prem-up" if prem >= 0 else "wl-prem-down"
@@ -2141,7 +2140,7 @@ def render_watchlist_status(client_id):
                          f'<td><a class="wl-act" href="{bid}">Submit a bid &rarr;</a></td></tr>')
         return (f'<h2 class="wl-h2">{label}</h2><div class="wl-wrap"><table class="wl-table">'
                 '<thead><tr><th>Company</th><th>Structure</th><th>Price</th>'
-                '<th>Size</th><th>Last round</th><th>vs LR</th><th></th></tr></thead>'
+                '<th>Size</th><th>LR PPS</th><th>vs LR</th><th></th></tr></thead>'
                 f'<tbody>{rows}</tbody></table></div>')
 
     body = block("buy", sides["buy"]) + block("sell", sides["sell"])
@@ -2150,7 +2149,6 @@ def render_watchlist_status(client_id):
                 'to choose the companies you want to follow.</p>')
 
     return html_response(f"""
-    {TOPNAV_HTML}
     <style>
       .wl-wrap {{ overflow-x: auto; }}
       .wl-table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
@@ -2199,7 +2197,6 @@ def render_watchlist_status(client_id):
     <h1>Your Watchlist</h1>
     <p class="sub">Live status for the companies you're following.</p>
     {body}
-    {DISCLOSURE_HTML}
     """)
 
 
