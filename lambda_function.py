@@ -2038,6 +2038,7 @@ def render_watchlist_status(client_id):
         jwt = None
 
     sides = {"buy": [], "sell": []}
+    wl_oid = {}
     if jwt:
         res = call_pipeline_api("GET", f"/people/{client_id}.json", jwt=jwt)
         cf = res["data"].get("custom_fields", {}) if res.get("status") == 200 and isinstance(res.get("data"), dict) else {}
@@ -2048,6 +2049,7 @@ def render_watchlist_status(client_id):
                 nm = id_to_name.get(int(oid))
                 if nm:
                     sides[side].append(nm)
+                    wl_oid[(side, nm.strip().lower())] = int(oid)
 
     deals = _wl_json(WL_DEALS_BUCKET, WL_DEALS_KEY, [])
     if not isinstance(deals, list):
@@ -2081,6 +2083,13 @@ def render_watchlist_status(client_id):
                 safe_cell = safe + '<div class="wl-blocked">Company blocks direct transfers</div>'
             else:
                 safe_cell = safe
+            _oid = wl_oid.get((side, nm.strip().lower()))
+            if _oid:
+                safe_cell = (
+                    f'<button type="button" class="wl-rm" data-side="{side}" '
+                    f'data-oid="{_oid}" data-name="{html.escape(nm, quote=True)}" '
+                    f'title="Remove from watchlist">&times;</button>' + safe_cell
+                )
             bid = f'{WL_WEBBID_URL}?name={urllib.parse.quote(nm)}'
             if live:
                 first = True
@@ -2147,6 +2156,35 @@ def render_watchlist_status(client_id):
       .wl-act {{ font-weight: 600; text-decoration: none; white-space: nowrap; }}
       .wl-prem-up {{ color: #b45309; }}
       .wl-prem-down {{ color: #1f7a4d; }}
+      .wl-rm {{ float: right; margin-left: 10px; border: none; background: none;
+                color: #b6b2aa; font-size: 17px; line-height: 1; cursor: pointer;
+                padding: 0 2px; }}
+      .wl-rm:hover {{ color: #b45309; }}
+    </style>
+    <script>
+      document.addEventListener("DOMContentLoaded", function () {{
+        document.querySelectorAll(".wl-rm").forEach(function (b) {{
+          b.addEventListener("click", function () {{
+            var nm = b.getAttribute("data-name");
+            if (!confirm("Remove " + nm + " from your watchlist?")) {{ return; }}
+            b.disabled = true;
+            var f = document.createElement("form");
+            f.method = "POST";
+            f.action = window.location.pathname + window.location.search;
+            [["action", "wl_remove"],
+             ["side", b.getAttribute("data-side")],
+             ["option_id", b.getAttribute("data-oid")]].forEach(function (kv) {{
+              var i = document.createElement("input");
+              i.type = "hidden"; i.name = kv[0]; i.value = kv[1];
+              f.appendChild(i);
+            }});
+            document.body.appendChild(f);
+            f.submit();
+          }});
+        }});
+      }});
+    </script>
+    <style>
     </style>
     <h1>Your Watchlist</h1>
     <p class="sub">Live status for the companies you're following.</p>
@@ -2244,6 +2282,26 @@ def lambda_handler(event, context):
         # Build Watchlist grid submit: dual write (CRM interest + S3 watchlist) for the
         # logged-in client's OWN portfolio. Uses the multi-value parse so the checkbox
         # groups aren't collapsed.
+        if action == "wl_remove":
+            back = raw_path + ("?as=" + urllib.parse.quote(qs["as"]) if (is_admin and qs.get("as")) else "")
+            try:
+                jwt = get_jwt()
+            except Exception as e:
+                print(f"wl_remove: jwt load failed: {e}")
+                return {"statusCode": 303, "headers": {"Location": back}, "body": ""}
+            side = form.get("side") if form.get("side") in ("buy", "sell") else "buy"
+            try:
+                drop = int(form.get("option_id") or 0)
+            except (TypeError, ValueError):
+                drop = 0
+            owner = qs["as"] if (is_admin and qs.get("as")) else client_id
+            field = BUY_INTEREST_FIELD if side == "buy" else SELL_INTEREST_FIELD
+            cur = call_pipeline_api("GET", f"/people/{owner}.json", jwt=jwt)
+            cur_cf = cur["data"].get("custom_fields", {}) if cur.get("status") == 200 and isinstance(cur.get("data"), dict) else {}
+            keep = [i for i in cf_id_list(cur_cf.get(field)) if int(i) != drop]
+            _crm_set_interest(owner, side, keep, None, jwt, mode="replace")
+            return {"statusCode": 303, "headers": {"Location": back}, "body": ""}
+
         if action == "watchlist_save":
             try:
                 jwt = get_jwt()
