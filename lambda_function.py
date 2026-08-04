@@ -2001,6 +2001,33 @@ def _wl_money(v):
     return f"${n:,.0f}"
 
 
+WL_TRANSFER_FIELD = "custom_label_3900670"
+WL_DIRECT_BLOCKED = 6888893
+WL_MAX_COMPANY_FETCH = 40
+
+
+def _wl_blocked_names(names, jwt):
+    """Set of lowercased company names whose Transferability includes Direct Blocked."""
+    out = set()
+    if not jwt or not names:
+        return out
+    by_name = _company_id_by_name()
+    for nm in list(names)[:WL_MAX_COMPANY_FETCH]:
+        cid = by_name.get(nm.strip().lower())
+        if not cid:
+            continue
+        try:
+            res = call_pipeline_api("GET", f"/companies/{cid}.json", jwt=jwt)
+            if res.get("status") != 200 or not isinstance(res.get("data"), dict):
+                continue
+            cf = res["data"].get("custom_fields") or {}
+            if WL_DIRECT_BLOCKED in cf_id_list(cf.get(WL_TRANSFER_FIELD)):
+                out.add(nm.strip().lower())
+        except Exception as e:
+            print(f"watchlist: transferability lookup failed for {nm}: {e}")
+    return out
+
+
 def render_watchlist_status(client_id):
     """Client-facing watchlist: their interests with actionable status. No name shown."""
     try:
@@ -2025,6 +2052,8 @@ def render_watchlist_status(client_id):
     if not isinstance(deals, list):
         deals = []
 
+    blocked = _wl_blocked_names(sides["buy"] + sides["sell"], jwt)
+
     def block(side, names):
         want_type = "Sell Order" if side == "buy" else "Buy Order"
         label = "Companies you're looking to buy" if side == "buy" else "Companies you're looking to sell"
@@ -2040,6 +2069,10 @@ def render_watchlist_status(client_id):
         for nm in names:
             live = _live_for(nm)
             safe = html.escape(nm)
+            if nm.strip().lower() in blocked:
+                safe_cell = safe + '<div class="blocked">Company blocks direct transfers</div>'
+            else:
+                safe_cell = safe
             if live:
                 first = True
                 for d in live:
@@ -2047,7 +2080,7 @@ def render_watchlist_status(client_id):
                     link = f'{WL_DEAL_URL}?deal_id={did}'
                     rows += (
                         "<tr>"
-                        + (f'<td class="co" rowspan="{len(live)}">{safe}</td>' if first else "")
+                        + (f'<td class="co" rowspan="{len(live)}">{safe_cell}</td>' if first else "")
                         + f'<td>{html.escape(d.get("structure") or "")}</td>'
                         + f'<td>{_wl_money(d.get("net") or d.get("gross"))}</td>'
                         + f'<td>{_wl_money(d.get("min_deal_size"))} &ndash; {_wl_money(d.get("max_deal_size"))}</td>'
@@ -2068,7 +2101,7 @@ def render_watchlist_status(client_id):
                            f"in touch with holders. Send your firm bid and we'll let you know "
                            f"if any of them accept it.")
                     act = f'<a class="act" href="{bid}">Submit a bid &rarr;</a>'
-                rows += (f'<tr><td class="co">{safe}</td>'
+                rows += (f'<tr><td class="co">{safe_cell}</td>'
                          f'<td colspan="3" class="soft">{msg}</td>'
                          f'<td>{act}</td></tr>')
         return (f'<h2>{label}</h2><div class="table-wrap"><table>'
@@ -2104,6 +2137,8 @@ def render_watchlist_status(client_id):
   th {{ font-size:12px; letter-spacing:.06em; text-transform:uppercase; }}
   td.co {{ font-weight:600; white-space:nowrap; }}
   .soft {{ color:#6b7280; }}
+  .blocked {{ font-style:italic; font-weight:400; font-size:12px; color:#6b7280;
+              margin-top:3px; white-space:normal; }}
   a.act {{ color:#0C447C; font-weight:600; text-decoration:none; white-space:nowrap; }}
   a.act:hover {{ text-decoration:underline; }}
 </style></head><body><div class="wrap">
