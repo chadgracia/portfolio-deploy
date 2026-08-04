@@ -1979,7 +1979,8 @@ def _wl_json(bucket, key, default):
 def _wl_holders(name):
     data = _wl_json(COMPANIES_BUCKET, WL_HOLDERS_KEY, {})
     if isinstance(data, dict):
-        for k, v in data.items():
+        counts = data.get("counts") or {}
+        for k, v in counts.items():
             if str(k).strip().lower() == (name or "").strip().lower():
                 try:
                     return int(v)
@@ -2019,7 +2020,6 @@ def render_watchlist_status(client_id):
                 nm = id_to_name.get(int(oid))
                 if nm:
                     sides[side].append(nm)
-            sides[side].sort(key=lambda s: s.lower())
 
     deals = _wl_json(WL_DEALS_BUCKET, WL_DEALS_KEY, [])
     if not isinstance(deals, list):
@@ -2030,11 +2030,15 @@ def render_watchlist_status(client_id):
         label = "Companies you're looking to buy" if side == "buy" else "Companies you're looking to sell"
         if not names:
             return ""
+        def _live_for(n):
+            return [d for d in deals
+                    if (d.get("company") or "").strip().lower() == n.strip().lower()
+                    and d.get("type") == want_type]
+
+        names = sorted(names, key=lambda n: (0 if _live_for(n) else 1, n.lower()))
         rows = ""
         for nm in names:
-            live = [d for d in deals
-                    if (d.get("company") or "").strip().lower() == nm.strip().lower()
-                    and d.get("type") == want_type]
+            live = _live_for(nm)
             safe = html.escape(nm)
             if live:
                 first = True
@@ -2060,8 +2064,10 @@ def render_watchlist_status(client_id):
                            f"Send your firm bid and we'll let you know if any of them accept it.")
                     act = f'<a class="act" href="{bid}">Submit a bid &rarr;</a>'
                 else:
-                    msg = f"We're sourcing {safe} now and will be in touch."
-                    act = '<span class="soft">In progress</span>'
+                    msg = (f"We don't currently have an active seller for {safe}, but we're "
+                           f"in touch with holders. Send your firm bid and we'll let you know "
+                           f"if any of them accept it.")
+                    act = f'<a class="act" href="{bid}">Submit a bid &rarr;</a>'
                 rows += (f'<tr><td class="co">{safe}</td>'
                          f'<td colspan="3" class="soft">{msg}</td>'
                          f'<td>{act}</td></tr>')
