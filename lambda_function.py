@@ -1596,9 +1596,10 @@ TOPNAV_HTML = """
         <a class="navbtn brand" href="https://www.graciagroup.com">Gracia Group</a>
       </div>
       <div class="navgroup">
-        <a class="navbtn" href="?view=watchlist">Build Watchlist</a>
+        <a class="navbtn" href="?">Watchlist</a>
+        <a class="navbtn" href="?view=watchlist">Update watchlist</a>
+        <a class="navbtn" href="?view=holdings">Holdings</a>
         <a class="navbtn" href="https://trades.graciagroup.com/">Indications</a>
-        <button class="navbtn navbtn-soon" type="button" disabled title="Coming soon">Download PDF</button>
       </div>
     </nav>"""
 
@@ -2054,11 +2055,18 @@ def render_watchlist_status(client_id):
 
     blocked = _wl_blocked_names(sides["buy"] + sides["sell"], jwt)
 
+    def _num(v):
+        try:
+            return float(str(v).replace("$", "").replace(",", "").strip())
+        except (TypeError, ValueError):
+            return None
+
     def block(side, names):
         want_type = "Sell Order" if side == "buy" else "Buy Order"
         label = "Companies you're looking to buy" if side == "buy" else "Companies you're looking to sell"
         if not names:
             return ""
+
         def _live_for(n):
             return [d for d in deals
                     if (d.get("company") or "").strip().lower() == n.strip().lower()
@@ -2070,90 +2078,81 @@ def render_watchlist_status(client_id):
             live = _live_for(nm)
             safe = html.escape(nm)
             if nm.strip().lower() in blocked:
-                safe_cell = safe + '<div class="blocked">Company blocks direct transfers</div>'
+                safe_cell = safe + '<div class="wl-blocked">Company blocks direct transfers</div>'
             else:
                 safe_cell = safe
+            bid = f'{WL_WEBBID_URL}?name={urllib.parse.quote(nm)}'
             if live:
                 first = True
                 for d in live:
                     did = html.escape(str(d.get("id") or ""), quote=True)
-                    link = f'{WL_DEAL_URL}?deal_id={did}'
+                    price = _num(d.get("net")) or _num(d.get("gross"))
+                    lr_pps = _num(d.get("company_lr_pps"))
+                    lr_val = _num(d.get("company_lr_val"))
+                    lr_cell = f"${lr_val:,.2f}B" if lr_val else "&ndash;"
+                    if price and lr_pps and lr_pps > 0:
+                        prem = (price / lr_pps - 1.0) * 100.0
+                        cls = "wl-prem-up" if prem >= 0 else "wl-prem-down"
+                        prem_cell = f'<span class="{cls}">{prem:+.0f}%</span>'
+                    else:
+                        prem_cell = "&ndash;"
                     rows += (
                         "<tr>"
-                        + (f'<td class="co" rowspan="{len(live)}">{safe_cell}</td>' if first else "")
+                        + (f'<td class="wl-co" rowspan="{len(live)}">{safe_cell}</td>' if first else "")
                         + f'<td>{html.escape(d.get("structure") or "")}</td>'
-                        + f'<td>{_wl_money(d.get("net") or d.get("gross"))}</td>'
+                        + f'<td>{_wl_money(price)}</td>'
                         + f'<td>{_wl_money(d.get("min_deal_size"))} &ndash; {_wl_money(d.get("max_deal_size"))}</td>'
-                        + f'<td><a class="act" href="{link}">View deal &rarr;</a></td>'
+                        + f'<td>{lr_cell}</td>'
+                        + f'<td>{prem_cell}</td>'
+                        + f'<td><a class="wl-act" href="{WL_DEAL_URL}?deal_id={did}">View deal &rarr;</a></td>'
                         + "</tr>"
                     )
                     first = False
             else:
                 h = _wl_holders(nm)
-                bid = f'{WL_WEBBID_URL}?name={urllib.parse.quote(nm)}'
                 if h > 0:
                     msg = (f"We don't currently have an active seller for {safe}, but "
                            f"<strong>{h:,} holders</strong> in our system have shares. "
                            f"Send your firm bid and we'll let you know if any of them accept it.")
-                    act = f'<a class="act" href="{bid}">Submit a bid &rarr;</a>'
                 else:
                     msg = (f"We don't currently have an active seller for {safe}, but we're "
                            f"in touch with holders. Send your firm bid and we'll let you know "
                            f"if any of them accept it.")
-                    act = f'<a class="act" href="{bid}">Submit a bid &rarr;</a>'
-                rows += (f'<tr><td class="co">{safe_cell}</td>'
-                         f'<td colspan="3" class="soft">{msg}</td>'
-                         f'<td>{act}</td></tr>')
-        return (f'<h2>{label}</h2><div class="table-wrap"><table>'
+                rows += (f'<tr><td class="wl-co">{safe_cell}</td>'
+                         f'<td colspan="5" class="wl-soft">{msg}</td>'
+                         f'<td><a class="wl-act" href="{bid}">Submit a bid &rarr;</a></td></tr>')
+        return (f'<h2 class="wl-h2">{label}</h2><div class="wl-wrap"><table class="wl-table">'
                 '<thead><tr><th>Company</th><th>Structure</th><th>Price</th>'
-                '<th>Size</th><th></th></tr></thead>'
+                '<th>Size</th><th>Last round</th><th>vs LR</th><th></th></tr></thead>'
                 f'<tbody>{rows}</tbody></table></div>')
 
     body = block("buy", sides["buy"]) + block("sell", sides["sell"])
     if not body:
-        body = ('<p class="soft">Your watchlist is empty. Use <strong>Update watchlist</strong> '
+        body = ('<p class="wl-soft">Your watchlist is empty. Use <strong>Update watchlist</strong> '
                 'to choose the companies you want to follow.</p>')
 
-    page = f"""<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Watchlist</title>
-<link rel="stylesheet" href="https://s3.us-east-1.amazonaws.com/main.css/master.css">
-<style>
-  body {{ background:#F2EFE8; margin:0; padding:28px 20px; }}
-  .wrap {{ max-width:1100px; margin:0 auto; }}
-  .nav {{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px; }}
-  .nav a {{ background:#44576B; color:#fff; text-decoration:none; padding:9px 18px;
-            border-radius:5px; font-size:14px; font-weight:500; }}
-  .card {{ background:#f8f9fa; border-radius:5px; padding:18px 22px;
-           box-shadow:0 2px 4px rgba(0,0,0,0.1); margin-bottom:18px; }}
-  h1 {{ margin:0 0 4px; }}
-  h2 {{ font-size:17px; margin:22px 0 10px; }}
-  h2:first-child {{ margin-top:4px; }}
-  .sub {{ margin:0 0 8px; font-style:italic; color:#6b7280; }}
-  .table-wrap {{ overflow-x:auto; }}
-  table {{ width:100%; border-collapse:collapse; font-size:14px; }}
-  th, td {{ border:1px solid #ddd; padding:11px 12px; text-align:left;
-            vertical-align:top; }}
-  th {{ font-size:12px; letter-spacing:.06em; text-transform:uppercase; }}
-  td.co {{ font-weight:600; white-space:nowrap; }}
-  .soft {{ color:#6b7280; }}
-  .blocked {{ font-style:italic; font-weight:400; font-size:12px; color:#6b7280;
-              margin-top:3px; white-space:normal; }}
-  a.act {{ color:#0C447C; font-weight:600; text-decoration:none; white-space:nowrap; }}
-  a.act:hover {{ text-decoration:underline; }}
-</style></head><body><div class="wrap">
-<div class="nav">
-  <a href="?view=watchlist">Update watchlist</a>
-  <a href="?view=holdings">Holdings</a>
-  <a href="https://trades.graciagroup.com/">Browse all indications</a>
-</div>
-<div class="card">
-  <h1>Your Watchlist</h1>
-  <p class="sub">Live status for the companies you're following.</p>
-  {body}
-</div>
-</div></body></html>"""
-    return html_response(page)
+    return html_response(f"""
+    {TOPNAV_HTML}
+    <style>
+      .wl-wrap {{ overflow-x: auto; }}
+      .wl-table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
+      .wl-table th, .wl-table td {{ border: 1px solid #ddd; padding: 11px 12px;
+                                    text-align: left; vertical-align: top; }}
+      .wl-table th {{ font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }}
+      .wl-co {{ font-weight: 600; white-space: nowrap; }}
+      .wl-h2 {{ font-size: 17px; margin: 22px 0 10px; }}
+      .wl-soft {{ color: #6b7280; }}
+      .wl-blocked {{ font-style: italic; font-weight: 400; font-size: 12px;
+                     color: #6b7280; margin-top: 3px; white-space: normal; }}
+      .wl-act {{ font-weight: 600; text-decoration: none; white-space: nowrap; }}
+      .wl-prem-up {{ color: #b45309; }}
+      .wl-prem-down {{ color: #1f7a4d; }}
+    </style>
+    <h1>Your Watchlist</h1>
+    <p class="sub">Live status for the companies you're following.</p>
+    {body}
+    {DISCLOSURE_HTML}
+    """)
 
 
 def lambda_handler(event, context):
