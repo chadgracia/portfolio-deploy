@@ -2236,13 +2236,14 @@ def lambda_handler(event, context):
         # Post/Redirect/Get so a refresh doesn't resubmit the form.
         return {"statusCode": 303, "headers": {"Location": raw_path}, "body": ""}
 
+    view_id = qs["as"] if (is_admin and qs.get("as")) else client_id
     if qs.get("view") == "watchlist":
-        return render_watchlist_builder(client_id)
+        return render_watchlist_builder(view_id)
     if qs.get("view") == "holdings":
-        return render_portfolio(load_portfolio(client_id), is_admin)
+        return render_portfolio(load_portfolio(view_id), is_admin)
     if qs.get("view") == "admin" and is_admin:
         return render_admin_overview(client_id)
-    return render_watchlist_status(client_id)
+    return render_watchlist_status(view_id)
 
 
 # ── Local helper: seed a client's portfolio + mint their magic link ────────────────
