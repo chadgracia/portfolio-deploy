@@ -2194,6 +2194,7 @@ def render_watchlist_status(client_id):
       }});
     </script>
     <style>
+      .wl-spacer {{ display: none; }}
     </style>
     <h1>Your Watchlist</h1>
     <p class="sub">Live status for the companies you're following.</p>
@@ -2288,9 +2289,8 @@ def lambda_handler(event, context):
             invited["invited_email"] = email
             save_portfolio(invited)
             return _json_ok()
-        # Build Watchlist grid submit: dual write (CRM interest + S3 watchlist) for the
-        # logged-in client's OWN portfolio. Uses the multi-value parse so the checkbox
-        # groups aren't collapsed.
+        # Remove one company from this side's CRM interest field. Writes only that
+        # field via the shared primitive; Broadcast and the other side are untouched.
         if action == "wl_remove":
             back = raw_path + ("?as=" + urllib.parse.quote(qs["as"]) if (is_admin and qs.get("as")) else "")
             try:
@@ -2311,6 +2311,9 @@ def lambda_handler(event, context):
             _crm_set_interest(owner, side, keep, None, jwt, mode="replace")
             return {"statusCode": 303, "headers": {"Location": back}, "body": ""}
 
+        # Build Watchlist grid submit: dual write (CRM interest + S3 watchlist) for the
+        # logged-in client's OWN portfolio. Uses the multi-value parse so the checkbox
+        # groups aren't collapsed.
         if action == "watchlist_save":
             try:
                 jwt = get_jwt()
