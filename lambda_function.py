@@ -2012,13 +2012,14 @@ def _wl_pps(v):
 
 
 WL_TRANSFER_FIELD = "custom_label_3900670"
+WL_CATALYST_FIELD = "custom_label_3999603"
 WL_DIRECT_BLOCKED = 6888893
 WL_MAX_COMPANY_FETCH = 40
 
 
-def _wl_blocked_names(names, jwt):
-    """Set of lowercased company names whose Transferability includes Direct Blocked."""
-    out = set()
+def _wl_company_meta(names, jwt):
+    """{lower(name): {"blocked": bool, "catalyst": str}} for watchlisted companies."""
+    out = {}
     if not jwt or not names:
         return out
     by_name = _company_id_by_name()
@@ -2031,10 +2032,12 @@ def _wl_blocked_names(names, jwt):
             if res.get("status") != 200 or not isinstance(res.get("data"), dict):
                 continue
             cf = res["data"].get("custom_fields") or {}
-            if WL_DIRECT_BLOCKED in cf_id_list(cf.get(WL_TRANSFER_FIELD)):
-                out.add(nm.strip().lower())
+            out[nm.strip().lower()] = {
+                "blocked": WL_DIRECT_BLOCKED in cf_id_list(cf.get(WL_TRANSFER_FIELD)),
+                "catalyst": (cf.get(WL_CATALYST_FIELD) or "").strip(),
+            }
         except Exception as e:
-            print(f"watchlist: transferability lookup failed for {nm}: {e}")
+            print(f"watchlist: company meta lookup failed for {nm}: {e}")
     return out
 
 
@@ -2064,7 +2067,7 @@ def render_watchlist_status(client_id):
     if not isinstance(deals, list):
         deals = []
 
-    blocked = _wl_blocked_names(sides["buy"] + sides["sell"], jwt)
+    meta = _wl_company_meta(sides["buy"] + sides["sell"], jwt)
 
     def _num(v):
         try:
@@ -2087,24 +2090,29 @@ def render_watchlist_status(client_id):
         rows = ""
         for nm in names:
             live = _live_for(nm)
+            _m = meta.get(nm.strip().lower()) or {}
             safe = html.escape(nm)
-            if nm.strip().lower() in blocked:
-                safe_cell = safe + '<div class="wl-blocked">Company blocks direct transfers</div>'
-            else:
-                safe_cell = safe
+            _inner = f'<span class="wl-name">{safe}</span>'
             _oid = wl_oid.get((side, nm.strip().lower()))
             if _oid:
-                safe_cell = (
+                _inner += (
                     f'<button type="button" class="wl-rm" data-side="{side}" '
                     f'data-oid="{_oid}" data-name="{html.escape(nm, quote=True)}" '
-                    f'title="Remove from watchlist">&times;</button>' + safe_cell
+                    f'title="Remove from watchlist">&times;</button>'
                 )
+            safe_cell = f'<div class="wl-corow">{_inner}</div>'
+            if _m.get("blocked"):
+                safe_cell += '<div class="wl-blocked">Company blocks direct transfers</div>'
+            if _m.get("catalyst"):
+                safe_cell += f'<div class="wl-cat">{html.escape(_m["catalyst"])}</div>'
             bid = f'{WL_WEBBID_URL}?name={urllib.parse.quote(nm)}'
             if live:
                 first = True
                 for d in live:
                     did = html.escape(str(d.get("id") or ""), quote=True)
                     price = _num(d.get("net")) or _num(d.get("gross"))
+                    price_cell = (_wl_pps(price) if price
+                                  else '<span class="wl-soft">Awaiting bids</span>')
                     lr_pps = _num(d.get("company_lr_pps"))
                     lr_cell = _wl_pps(lr_pps) if lr_pps else "&ndash;"
                     if price and lr_pps and lr_pps > 0:
@@ -2117,7 +2125,7 @@ def render_watchlist_status(client_id):
                         "<tr>"
                         + (f'<td class="wl-co" rowspan="{len(live)}">{safe_cell}</td>' if first else "")
                         + f'<td>{html.escape(d.get("structure") or "")}</td>'
-                        + f'<td>{_wl_pps(price)}</td>'
+                        + f'<td>{price_cell}</td>'
                         + f'<td>{lr_cell}</td>'
                         + f'<td>{prem_cell}</td>'
                         + f'<td>{_wl_money(d.get("min_deal_size"))} &ndash; {_wl_money(d.get("max_deal_size"))}</td>'
@@ -2141,7 +2149,9 @@ def render_watchlist_status(client_id):
         return (f'<h2 class="wl-h2">{label}</h2><div class="wl-wrap"><table class="wl-table">'
                 '<thead><tr><th>Company</th><th>Structure</th><th>Price</th>'
                 '<th>LR PPS</th><th>vs LR</th><th>Size</th><th></th></tr></thead>'
-                f'<tbody>{rows}</tbody></table></div>')
+                f'<tbody>{rows}</tbody></table></div>'
+                '<p class="wl-soft" style="font-size:12px; margin-top:6px;">'
+                'Use &times; to remove a company from your watchlist.</p>')
 
     body = block("buy", sides["buy"]) + block("sell", sides["sell"])
     if not body:
@@ -2163,9 +2173,13 @@ def render_watchlist_status(client_id):
       .wl-act {{ font-weight: 600; text-decoration: none; white-space: nowrap; }}
       .wl-prem-up {{ color: #b45309; }}
       .wl-prem-down {{ color: #1f7a4d; }}
-      .wl-rm {{ float: right; margin-left: 10px; border: none; background: none;
-                color: #b6b2aa; font-size: 17px; line-height: 1; cursor: pointer;
-                padding: 0 2px; }}
+      .wl-corow {{ display: flex; align-items: baseline; justify-content: space-between;
+                   gap: 14px; }}
+      .wl-name {{ white-space: normal; }}
+      .wl-cat {{ font-size: 12px; font-weight: 400; color: #6b7280; margin-top: 4px;
+                 white-space: normal; }}
+      .wl-rm {{ border: none; background: none; color: #b6b2aa; font-size: 17px;
+                line-height: 1; cursor: pointer; padding: 0 2px; flex: 0 0 auto; }}
       .wl-rm:hover {{ color: #b45309; }}
     </style>
     <script>
