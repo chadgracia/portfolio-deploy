@@ -2002,6 +2002,15 @@ def _wl_money(v):
     return f"${n:,.0f}"
 
 
+def _wl_pps(v):
+    """Per-share prices keep cents, so the premium column reconciles."""
+    try:
+        n = float(str(v).replace("$", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return "&ndash;"
+    return f"${n:,.2f}"
+
+
 WL_TRANSFER_FIELD = "custom_label_3900670"
 WL_DIRECT_BLOCKED = 6888893
 WL_MAX_COMPANY_FETCH = 40
@@ -2109,7 +2118,7 @@ def render_watchlist_status(client_id):
                         "<tr>"
                         + (f'<td class="wl-co" rowspan="{len(live)}">{safe_cell}</td>' if first else "")
                         + f'<td>{html.escape(d.get("structure") or "")}</td>'
-                        + f'<td>{_wl_money(price)}</td>'
+                        + f'<td>{_wl_pps(price)}</td>'
                         + f'<td>{_wl_money(d.get("min_deal_size"))} &ndash; {_wl_money(d.get("max_deal_size"))}</td>'
                         + f'<td>{lr_cell}</td>'
                         + f'<td>{prem_cell}</td>'
