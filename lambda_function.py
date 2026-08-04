@@ -1960,6 +1960,161 @@ def _parse_body_multi(event):
     return urllib.parse.parse_qs(body)
 
 
+WL_DEALS_BUCKET = "pipeline-public-deal-data"
+WL_DEALS_KEY = "pipeline_deals.json"
+WL_HOLDERS_KEY = "holder_counts.json"
+WL_WEBBID_URL = "https://7u6sphgup5gjuywcvpuwzhruiq0asgdz.lambda-url.us-east-1.on.aws/"
+WL_DEAL_URL = "https://ewjul4gl75iopu3yfgxfbmvyoq0tlmqf.lambda-url.us-east-1.on.aws/"
+
+
+def _wl_json(bucket, key, default):
+    try:
+        obj = boto3.client("s3").get_object(Bucket=bucket, Key=key)
+        return json.loads(obj["Body"].read())
+    except Exception as e:
+        print(f"watchlist: could not load {bucket}/{key}: {e}")
+        return default
+
+
+def _wl_holders(name):
+    data = _wl_json(COMPANIES_BUCKET, WL_HOLDERS_KEY, {})
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if str(k).strip().lower() == (name or "").strip().lower():
+                try:
+                    return int(v)
+                except (TypeError, ValueError):
+                    return 0
+    return 0
+
+
+def _wl_money(v):
+    try:
+        n = float(str(v).replace("$", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return ""
+    if n >= 1_000_000:
+        return f"${n/1_000_000:,.1f}M"
+    if n >= 1_000:
+        return f"${n/1_000:,.0f}K"
+    return f"${n:,.0f}"
+
+
+def render_watchlist_status(client_id):
+    """Client-facing watchlist: their interests with actionable status. No name shown."""
+    try:
+        jwt = get_jwt()
+    except Exception as e:
+        print(f"watchlist status: jwt failed: {e}")
+        jwt = None
+
+    sides = {"buy": [], "sell": []}
+    if jwt:
+        res = call_pipeline_api("GET", f"/people/{client_id}.json", jwt=jwt)
+        cf = res["data"].get("custom_fields", {}) if res.get("status") == 200 and isinstance(res.get("data"), dict) else {}
+        sec = load_security_maps(jwt)
+        for side, field in (("buy", BUY_INTEREST_FIELD), ("sell", SELL_INTEREST_FIELD)):
+            id_to_name = sec.get(side, {}).get("id_to_name", {})
+            for oid in cf_id_list(cf.get(field)):
+                nm = id_to_name.get(int(oid))
+                if nm:
+                    sides[side].append(nm)
+            sides[side].sort(key=lambda s: s.lower())
+
+    deals = _wl_json(WL_DEALS_BUCKET, WL_DEALS_KEY, [])
+    if not isinstance(deals, list):
+        deals = []
+
+    def block(side, names):
+        want_type = "Sell Order" if side == "buy" else "Buy Order"
+        label = "Companies you're looking to buy" if side == "buy" else "Companies you're looking to sell"
+        if not names:
+            return ""
+        rows = ""
+        for nm in names:
+            live = [d for d in deals
+                    if (d.get("company") or "").strip().lower() == nm.strip().lower()
+                    and d.get("type") == want_type]
+            safe = html.escape(nm)
+            if live:
+                first = True
+                for d in live:
+                    did = html.escape(str(d.get("id") or ""), quote=True)
+                    link = f'{WL_DEAL_URL}?deal_id={did}'
+                    rows += (
+                        "<tr>"
+                        + (f'<td class="co" rowspan="{len(live)}">{safe}</td>' if first else "")
+                        + f'<td>{html.escape(d.get("structure") or "")}</td>'
+                        + f'<td>{_wl_money(d.get("net") or d.get("gross"))}</td>'
+                        + f'<td>{_wl_money(d.get("min_deal_size"))} &ndash; {_wl_money(d.get("max_deal_size"))}</td>'
+                        + f'<td><a class="act" href="{link}">View deal &rarr;</a></td>'
+                        + "</tr>"
+                    )
+                    first = False
+            else:
+                h = _wl_holders(nm)
+                bid = f'{WL_WEBBID_URL}?name={urllib.parse.quote(nm)}'
+                if h > 0:
+                    msg = (f"We don't currently have an active seller for {safe}, but "
+                           f"<strong>{h:,} holders</strong> in our system have shares. "
+                           f"Send your firm bid and we'll let you know if any of them accept it.")
+                    act = f'<a class="act" href="{bid}">Submit a bid &rarr;</a>'
+                else:
+                    msg = f"We're sourcing {safe} now and will be in touch."
+                    act = '<span class="soft">In progress</span>'
+                rows += (f'<tr><td class="co">{safe}</td>'
+                         f'<td colspan="3" class="soft">{msg}</td>'
+                         f'<td>{act}</td></tr>')
+        return (f'<h2>{label}</h2><div class="table-wrap"><table>'
+                '<thead><tr><th>Company</th><th>Structure</th><th>Price</th>'
+                '<th>Size</th><th></th></tr></thead>'
+                f'<tbody>{rows}</tbody></table></div>')
+
+    body = block("buy", sides["buy"]) + block("sell", sides["sell"])
+    if not body:
+        body = ('<p class="soft">Your watchlist is empty. Use <strong>Update watchlist</strong> '
+                'to choose the companies you want to follow.</p>')
+
+    page = f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watchlist</title>
+<link rel="stylesheet" href="https://s3.us-east-1.amazonaws.com/main.css/master.css">
+<style>
+  body {{ background:#F2EFE8; margin:0; padding:28px 20px; }}
+  .wrap {{ max-width:1100px; margin:0 auto; }}
+  .nav {{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px; }}
+  .nav a {{ background:#44576B; color:#fff; text-decoration:none; padding:9px 18px;
+            border-radius:5px; font-size:14px; font-weight:500; }}
+  .card {{ background:#f8f9fa; border-radius:5px; padding:18px 22px;
+           box-shadow:0 2px 4px rgba(0,0,0,0.1); margin-bottom:18px; }}
+  h1 {{ margin:0 0 4px; }}
+  h2 {{ font-size:17px; margin:22px 0 10px; }}
+  h2:first-child {{ margin-top:4px; }}
+  .sub {{ margin:0 0 8px; font-style:italic; color:#6b7280; }}
+  .table-wrap {{ overflow-x:auto; }}
+  table {{ width:100%; border-collapse:collapse; font-size:14px; }}
+  th, td {{ border:1px solid #ddd; padding:11px 12px; text-align:left;
+            vertical-align:top; }}
+  th {{ font-size:12px; letter-spacing:.06em; text-transform:uppercase; }}
+  td.co {{ font-weight:600; white-space:nowrap; }}
+  .soft {{ color:#6b7280; }}
+  a.act {{ color:#0C447C; font-weight:600; text-decoration:none; white-space:nowrap; }}
+  a.act:hover {{ text-decoration:underline; }}
+</style></head><body><div class="wrap">
+<div class="nav">
+  <a href="?view=watchlist">Update watchlist</a>
+  <a href="?view=holdings">Holdings</a>
+  <a href="https://trades.graciagroup.com/">Browse all indications</a>
+</div>
+<div class="card">
+  <h1>Your Watchlist</h1>
+  <p class="sub">Live status for the companies you're following.</p>
+  {body}
+</div>
+</div></body></html>"""
+    return html_response(page)
+
+
 def lambda_handler(event, context):
     method = (event.get("requestContext", {}).get("http", {}).get("method") or "GET").upper()
     raw_path = event.get("rawPath", "/")
@@ -2083,9 +2238,11 @@ def lambda_handler(event, context):
 
     if qs.get("view") == "watchlist":
         return render_watchlist_builder(client_id)
-    if is_admin:
+    if qs.get("view") == "holdings":
+        return render_portfolio(load_portfolio(client_id), is_admin)
+    if qs.get("view") == "admin" and is_admin:
         return render_admin_overview(client_id)
-    return render_portfolio(load_portfolio(client_id), is_admin)
+    return render_watchlist_status(client_id)
 
 
 # ── Local helper: seed a client's portfolio + mint their magic link ────────────────
