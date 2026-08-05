@@ -2060,7 +2060,8 @@ def render_client_link(base_url):
     <p class="sub">Enter a Pipeline person ID to generate that client's permanent watchlist link.</p>
     <div class="lk-form">
       <input id="lk-id" type="text" inputmode="numeric" placeholder="e.g. 1309687264">
-      <button type="button" onclick="lkGo()">Generate</button>
+      <button type="button" onclick="lkGo()">Get their link</button>
+      <button type="button" onclick="lkView()">View as them</button>
     </div>
     <div id="lk-out" class="lk-out">
       <div id="lk-who" style="font-weight:600; margin-bottom:6px;"></div>
@@ -2091,6 +2092,11 @@ def render_client_link(base_url):
             document.getElementById('lk-out').style.display = 'block';
           }})
           .catch(function (e) {{ alert('Error: ' + e); }});
+      }}
+      function lkView() {{
+        var id = (document.getElementById('lk-id').value || '').trim();
+        if (!id) {{ return; }}
+        window.open('?as=' + encodeURIComponent(id), '_blank');
       }}
       function lkCopy() {{
         var el = document.getElementById('lk-url');
