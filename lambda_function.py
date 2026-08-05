@@ -2206,18 +2206,24 @@ def render_watchlist_status(client_id):
                     )
                     first = False
             else:
-                h = _wl_holders(nm)
-                if h > 0:
-                    msg = (f"We don't currently have an active seller for {safe}, but "
-                           f"<strong>{h:,} holders</strong> in our system have shares. "
-                           f"Send your firm bid and we'll let you know if any of them accept it.")
+                if side == "sell":
+                    msg = (f"We don't currently have a live bid on {safe}. Send us your firm "
+                           f"ask and we'll circulate it to buyers in our network.")
+                    act_txt = "Submit an offer &rarr;"
                 else:
-                    msg = (f"We don't currently have an active seller for {safe}, but we're "
-                           f"in touch with holders. Send your firm bid and we'll let you know "
-                           f"if any of them accept it.")
+                    h = _wl_holders(nm)
+                    if h > 0:
+                        msg = (f"We don't currently have an active seller for {safe}, but "
+                               f"<strong>{h:,} holders</strong> in our system have shares. "
+                               f"Send your firm bid and we'll let you know if any of them accept it.")
+                    else:
+                        msg = (f"We don't currently have an active seller for {safe}, but we're "
+                               f"in touch with holders. Send your firm bid and we'll let you know "
+                               f"if any of them accept it.")
+                    act_txt = "Submit a bid &rarr;"
                 rows += (f'<tr><td class="wl-co">{safe_cell}</td>'
                          f'<td colspan="5" class="wl-soft">{msg}</td>'
-                         f'<td><a class="wl-act" href="{bid}">Submit a bid &rarr;</a></td></tr>')
+                         f'<td><a class="wl-act" href="{bid}">{act_txt}</a></td></tr>')
         return (f'<h2 class="wl-h2">{label}</h2><div class="wl-wrap"><table class="wl-table">'
                 '<thead><tr><th>Company</th><th>Structure</th><th>Price</th>'
                 '<th>LR PPS</th><th>vs LR</th><th>Size</th><th></th></tr></thead>'
