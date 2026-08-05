@@ -2063,6 +2063,7 @@ def render_client_link(base_url):
       <button type="button" onclick="lkGo()">Generate</button>
     </div>
     <div id="lk-out" class="lk-out">
+      <div id="lk-who" style="font-weight:600; margin-bottom:6px;"></div>
       <input id="lk-url" class="lk-url" readonly onclick="this.select()">
       <div class="lk-row">
         <button type="button" onclick="lkCopy()">Copy</button>
@@ -2079,6 +2080,14 @@ def render_client_link(base_url):
             if (!d || !d.url) {{ alert('Could not generate a link.'); return; }}
             document.getElementById('lk-url').value = d.url;
             document.getElementById('lk-open').href = d.url;
+            var who = document.getElementById('lk-who');
+            if (d.name) {{
+              who.textContent = 'Link for ' + d.name;
+              who.style.color = '';
+            }} else {{
+              who.textContent = 'No person found with that ID — check before sending.';
+              who.style.color = '#b45309';
+            }}
             document.getElementById('lk-out').style.display = 'block';
           }})
           .catch(function (e) {{ alert('Error: ' + e); }});
@@ -2418,11 +2427,18 @@ def lambda_handler(event, context):
     if qs.get("view") == "link_token" and is_admin:
         _lk_id = (qs.get("id") or "").strip()
         _lk_base = "https://" + event["requestContext"]["domainName"]
+        _lk_name = ""
+        if _lk_id:
+            try:
+                _lk_rec = (_people_index().get("by_id", {}) or {}).get(str(_lk_id)) or {}
+                _lk_name = (_lk_rec.get("name") or _lk_rec.get("first_name") or "").strip()
+            except Exception as e:
+                print(f"link_token: people index lookup failed: {e}")
         _lk_url = (f"{_lk_base}/?client={urllib.parse.quote(_lk_id)}"
                    f"&token={make_token(_lk_id)}") if _lk_id else ""
         return {"statusCode": 200,
                 "headers": {"Content-Type": "application/json"},
-                "body": json.dumps({"url": _lk_url})}
+                "body": json.dumps({"url": _lk_url, "name": _lk_name})}
     if qs.get("view") == "watchlist":
         return render_watchlist_builder(view_id)
     if qs.get("view") == "holdings":
