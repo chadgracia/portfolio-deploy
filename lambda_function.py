@@ -2041,6 +2041,57 @@ def _wl_company_meta(names, jwt):
     return out
 
 
+def render_client_link(base_url):
+    """Admin-only: type a Pipeline person id, get that client's magic link."""
+    return html_response(f"""
+    <style>
+      .lk-form {{ display:flex; gap:8px; flex-wrap:wrap; margin:14px 0 18px; }}
+      .lk-form input {{ padding:9px 12px; font-family:inherit; font-size:14px;
+                        border:1px solid var(--line); border-radius:6px; min-width:240px; }}
+      .lk-form button {{ padding:9px 18px; font-family:inherit; font-size:14px;
+                         font-weight:600; border:none; border-radius:6px;
+                         background:var(--ink); color:#fff; cursor:pointer; }}
+      .lk-out {{ display:none; margin-top:8px; }}
+      .lk-url {{ width:100%; padding:10px 12px; font-family:ui-monospace,monospace;
+                 font-size:13px; border:1px solid var(--line); border-radius:6px; }}
+      .lk-row {{ display:flex; gap:8px; align-items:center; margin-top:8px; }}
+    </style>
+    <h1>Client link</h1>
+    <p class="sub">Enter a Pipeline person ID to generate that client's permanent watchlist link.</p>
+    <div class="lk-form">
+      <input id="lk-id" type="text" inputmode="numeric" placeholder="e.g. 1309687264">
+      <button type="button" onclick="lkGo()">Generate</button>
+    </div>
+    <div id="lk-out" class="lk-out">
+      <input id="lk-url" class="lk-url" readonly onclick="this.select()">
+      <div class="lk-row">
+        <button type="button" onclick="lkCopy()">Copy</button>
+        <a id="lk-open" href="#" target="_blank">Open in new tab &rarr;</a>
+      </div>
+    </div>
+    <script>
+      function lkGo() {{
+        var id = (document.getElementById('lk-id').value || '').trim();
+        if (!id) {{ return; }}
+        fetch('?view=link_token&id=' + encodeURIComponent(id))
+          .then(function (r) {{ return r.json(); }})
+          .then(function (d) {{
+            if (!d || !d.url) {{ alert('Could not generate a link.'); return; }}
+            document.getElementById('lk-url').value = d.url;
+            document.getElementById('lk-open').href = d.url;
+            document.getElementById('lk-out').style.display = 'block';
+          }})
+          .catch(function (e) {{ alert('Error: ' + e); }});
+      }}
+      function lkCopy() {{
+        var el = document.getElementById('lk-url');
+        el.select();
+        document.execCommand('copy');
+      }}
+    </script>
+    """)
+
+
 def render_watchlist_status(client_id):
     """Client-facing watchlist: their interests with actionable status. No name shown."""
     try:
@@ -2362,6 +2413,16 @@ def lambda_handler(event, context):
         return {"statusCode": 303, "headers": {"Location": raw_path}, "body": ""}
 
     view_id = qs["as"] if (is_admin and qs.get("as")) else client_id
+    if qs.get("view") == "link" and is_admin:
+        return render_client_link("https://" + event["requestContext"]["domainName"])
+    if qs.get("view") == "link_token" and is_admin:
+        _lk_id = (qs.get("id") or "").strip()
+        _lk_base = "https://" + event["requestContext"]["domainName"]
+        _lk_url = (f"{_lk_base}/?client={urllib.parse.quote(_lk_id)}"
+                   f"&token={make_token(_lk_id)}") if _lk_id else ""
+        return {"statusCode": 200,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps({"url": _lk_url})}
     if qs.get("view") == "watchlist":
         return render_watchlist_builder(view_id)
     if qs.get("view") == "holdings":
