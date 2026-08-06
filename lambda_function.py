@@ -2107,6 +2107,91 @@ def render_client_link(base_url):
     """)
 
 
+AUCTIONS_KEY = "auctions.json"
+
+
+def _load_auctions():
+    try:
+        obj = boto3.client("s3").get_object(Bucket=COMPANIES_BUCKET, Key=AUCTIONS_KEY)
+        data = json.loads(obj["Body"].read())
+        return data.get("auctions") or {}
+    except Exception as e:
+        print(f"auctions: load failed: {e}")
+        return {}
+
+
+def _save_auctions(auctions):
+    boto3.client("s3").put_object(
+        Bucket=COMPANIES_BUCKET, Key=AUCTIONS_KEY,
+        Body=json.dumps({"auctions": auctions}, ensure_ascii=False).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+def _auc_num(v):
+    try:
+        s = str(v).replace("$", "").replace(",", "").strip()
+        return float(s) if s else None
+    except (TypeError, ValueError):
+        return None
+
+
+def render_auctions_admin(msg=""):
+    rows = ""
+    for aid, a in sorted(_load_auctions().items(),
+                         key=lambda kv: kv[1].get("created_at") or "", reverse=True):
+        rows += (
+            "<tr>"
+            f'<td><strong>{html.escape(a.get("company") or "")}</strong></td>'
+            f'<td>{html.escape(str(a.get("ask") or "&mdash;"))}</td>'
+            f'<td>{html.escape(str(a.get("min_size") or ""))} &ndash; {html.escape(str(a.get("max_size") or ""))}</td>'
+            f'<td>{html.escape(str(a.get("shares") or "&mdash;"))}</td>'
+            f'<td>{html.escape(a.get("status") or "open")}</td>'
+            f'<td><a href="?view=auction&amp;id={html.escape(aid, quote=True)}">View &rarr;</a></td>'
+            "</tr>"
+        )
+    if not rows:
+        rows = '<tr><td colspan="6" class="wl-soft">No auctions yet.</td></tr>'
+    banner = f'<p style="color:#1f7a4d; font-weight:600;">{html.escape(msg)}</p>' if msg else ""
+    return html_response(f"""
+    <style>
+      .auc-grid {{ display:grid; grid-template-columns:repeat(2,minmax(200px,1fr));
+                   gap:12px 16px; max-width:720px; margin:14px 0 18px; }}
+      .auc-grid label {{ display:block; font-size:13px; font-weight:600; margin-bottom:4px; }}
+      .auc-grid input {{ width:100%; padding:9px 12px; font-family:inherit; font-size:14px;
+                         border:1px solid var(--line); border-radius:6px; }}
+      .auc-full {{ grid-column:1 / -1; }}
+      .auc-btn {{ padding:10px 20px; font-family:inherit; font-size:14px; font-weight:600;
+                  border:none; border-radius:6px; background:var(--ink); color:#fff;
+                  cursor:pointer; }}
+      table.auc {{ width:100%; border-collapse:collapse; font-size:14px; margin-top:8px; }}
+      table.auc th, table.auc td {{ border:1px solid #ddd; padding:10px 12px; text-align:left; }}
+      table.auc th {{ font-size:12px; letter-spacing:.06em; text-transform:uppercase; }}
+    </style>
+    <h1>Auctions</h1>
+    <p class="sub">Create an auction, then share its link with interested buyers.</p>
+    {banner}
+    <form method="POST" action="?view=auctions">
+      <input type="hidden" name="action" value="auction_create">
+      <div class="auc-grid">
+        <div><label>Company</label><input name="company" required placeholder="Hadrian"></div>
+        <div><label>Seed deal ID (optional)</label><input name="deal_id" placeholder="55266875"></div>
+        <div><label>Ask price per share</label><input name="ask" placeholder="110"></div>
+        <div><label>Shares (optional)</label><input name="shares" placeholder="100000"></div>
+        <div><label>Min size ($)</label><input name="min_size" placeholder="250000"></div>
+        <div><label>Max size ($)</label><input name="max_size" placeholder="10000000"></div>
+        <div class="auc-full"><label>Note to buyers (optional)</label>
+          <input name="note" placeholder="Seller reviewing bids week of the 15th."></div>
+        <div class="auc-full"><button class="auc-btn" type="submit">Create auction</button></div>
+      </div>
+    </form>
+    <h2 class="wl-h2">Live auctions</h2>
+    <table class="auc"><thead><tr><th>Company</th><th>Ask</th><th>Size</th>
+      <th>Shares</th><th>Status</th><th></th></tr></thead>
+      <tbody>{rows}</tbody></table>
+    """)
+
+
 def render_watchlist_status(client_id):
     """Client-facing watchlist: their interests with actionable status. No name shown."""
     try:
@@ -2376,6 +2461,25 @@ def lambda_handler(event, context):
             invited["invited_email"] = email
             save_portfolio(invited)
             return _json_ok()
+        if action == "auction_create" and is_admin:
+            _auc = _load_auctions()
+            _aid = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+            _auc[_aid] = {
+                "company": (form.get("company") or "").strip(),
+                "deal_id": (form.get("deal_id") or "").strip(),
+                "ask": _auc_num(form.get("ask")),
+                "shares": _auc_num(form.get("shares")),
+                "min_size": _auc_num(form.get("min_size")),
+                "max_size": _auc_num(form.get("max_size")),
+                "note": (form.get("note") or "").strip(),
+                "status": "open",
+                "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+            _save_auctions(_auc)
+            return {"statusCode": 303,
+                    "headers": {"Location": raw_path + "?view=auctions"},
+                    "body": ""}
+
         # Remove one company from this side's CRM interest field. Writes only that
         # field via the shared primitive; Broadcast and the other side are untouched.
         if action == "wl_remove":
@@ -2434,6 +2538,8 @@ def lambda_handler(event, context):
         return {"statusCode": 303, "headers": {"Location": raw_path}, "body": ""}
 
     view_id = qs["as"] if (is_admin and qs.get("as")) else client_id
+    if qs.get("view") == "auctions" and is_admin:
+        return render_auctions_admin()
     if qs.get("view") == "link" and is_admin:
         return render_client_link("https://" + event["requestContext"]["domainName"])
     if qs.get("view") == "link_token" and is_admin:
