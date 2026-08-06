@@ -2277,7 +2277,7 @@ def _save_auction_bid(auction_id, email, name, bid):
                   ContentType="application/json")
 
 
-def render_auction(auction_id, client_id, is_admin):
+def render_auction(auction_id, client_id, is_admin, err=""):
     auc = (_load_auctions() or {}).get(str(auction_id))
     if not auc:
         return html_response("<h1>Auction not found</h1>"
@@ -2362,11 +2362,14 @@ def render_auction(auction_id, client_id, is_admin):
         _mx = me.get("max_size") if me else auc.get("max_size")
         _nt = html.escape(str(me.get("note") or ""), quote=True) if me else ""
         _coh = (me or {}).get("cash_on_hand")
+        _err_html = ('<p class="au-bad">That bid wasn\'t saved &mdash; enter a number '
+                     'greater than 0, e.g. 118.50.</p>') if err == "bid" else ""
         book = f"""
         {standing}
         {iqf_html}
         <div class="au-box">
           <h2 class="wl-h2">{'Update your bid' if me else 'Place a bid'}</h2>
+          {_err_html}
           <form method="POST" action="?view=auction&amp;id={html.escape(str(auction_id), quote=True)}">
             <input type="hidden" name="action" value="auction_bid">
             <input type="hidden" name="auction_id" value="{html.escape(str(auction_id), quote=True)}">
@@ -2734,9 +2737,13 @@ def lambda_handler(event, context):
             _rec = (_people_index().get("by_id", {}) or {}).get(str(_owner)) or {}
             _email = (_rec.get("email") or "").strip().lower()
             _name = (_rec.get("name") or _rec.get("first_name") or "").strip()
-            if _aid and _email:
+            # A bid must parse to a positive number, or the book would carry a null
+            # that sorts to the bottom and renders as a dash. Reject rather than store.
+            _gross = _auc_num(form.get("gross"))
+            _bad_bid = _gross is None or _gross <= 0
+            if _aid and _email and not _bad_bid:
                 _bid = {
-                    "gross": _auc_num(form.get("gross")),
+                    "gross": _gross,
                     "min_size": _auc_num(form.get("min_size")),
                     "max_size": _auc_num(form.get("max_size")),
                     "cash_on_hand": "no" if (form.get("cash_on_hand") == "no") else "yes",
@@ -2750,6 +2757,8 @@ def lambda_handler(event, context):
             _back = raw_path + "?view=auction&id=" + urllib.parse.quote(_aid)
             if is_admin and qs.get("as"):
                 _back += "&as=" + urllib.parse.quote(qs["as"])
+            if _bad_bid:
+                _back += "&err=bid"
             return {"statusCode": 303, "headers": {"Location": _back}, "body": ""}
 
         if action == "auction_create":
@@ -2836,7 +2845,8 @@ def lambda_handler(event, context):
 
     view_id = qs["as"] if (is_admin and qs.get("as")) else client_id
     if qs.get("view") == "auction" and qs.get("id"):
-        return render_auction(qs["id"], view_id, is_admin and not qs.get("as"))
+        return render_auction(qs["id"], view_id, is_admin and not qs.get("as"),
+                              qs.get("err") or "")
     if qs.get("view") == "auctions" and is_admin:
         return render_auctions_admin()
     if qs.get("view") == "link" and is_admin:
