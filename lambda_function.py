@@ -2143,9 +2143,10 @@ def render_auctions_admin(msg=""):
         rows += (
             "<tr>"
             f'<td><strong>{html.escape(a.get("company") or "")}</strong></td>'
-            f'<td>{html.escape(str(a.get("ask") or "&mdash;"))}</td>'
-            f'<td>{html.escape(str(a.get("min_size") or ""))} &ndash; {html.escape(str(a.get("max_size") or ""))}</td>'
-            f'<td>{html.escape(str(a.get("shares") or "&mdash;"))}</td>'
+            f'<td>{_wl_pps(a.get("ask")) if a.get("ask") else "&mdash;"}</td>'
+            f'<td>{_wl_money(a.get("min_size")) if a.get("min_size") else "&mdash;"} &ndash; '
+            f'{_wl_money(a.get("max_size")) if a.get("max_size") else "&mdash;"}</td>'
+            f'<td>{f"{int(a.get(chr(115)+chr(104)+chr(97)+chr(114)+chr(101)+chr(115))):,}" if a.get("shares") else "&mdash;"}</td>'
             f'<td>{html.escape(a.get("status") or "open")}</td>'
             f'<td><a href="?view=auction&amp;id={html.escape(aid, quote=True)}">View &rarr;</a></td>'
             "</tr>"
@@ -2167,6 +2168,8 @@ def render_auctions_admin(msg=""):
       table.auc {{ width:100%; border-collapse:collapse; font-size:14px; margin-top:8px; }}
       table.auc th, table.auc td {{ border:1px solid #ddd; padding:10px 12px; text-align:left; }}
       table.auc th {{ font-size:12px; letter-spacing:.06em; text-transform:uppercase; }}
+      .wl-h2 {{ font-size:17px; margin:22px 0 10px; }}
+      .wl-soft {{ color:#6b7280; }}
     </style>
     <h1>Auctions</h1>
     <p class="sub">Create an auction, then share its link with interested buyers.</p>
@@ -2461,7 +2464,11 @@ def lambda_handler(event, context):
             invited["invited_email"] = email
             save_portfolio(invited)
             return _json_ok()
-        if action == "auction_create" and is_admin:
+        if action == "auction_create":
+            if not is_admin:
+                return {"statusCode": 403,
+                        "headers": {"Content-Type": "text/plain"},
+                        "body": "forbidden"}
             _auc = _load_auctions()
             _aid = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
             _auc[_aid] = {
