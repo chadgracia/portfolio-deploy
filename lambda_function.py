@@ -2249,7 +2249,6 @@ def render_auction(auction_id, client_id, is_admin):
 
     top = _auc_num(ranked[0].get("gross")) if ranked else None
     low = _auc_num(ranked[-1].get("gross")) if ranked else None
-    holders = _wl_holders(company)
 
     def stat(label, value):
         return (f'<div class="au-stat"><div class="au-lbl">{label}</div>'
