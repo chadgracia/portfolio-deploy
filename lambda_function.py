@@ -23,6 +23,7 @@ PROTOTYPE SCOPE / KNOWN LIMITS — read before this touches a real client:
 
 import os
 import json
+import re
 import time
 import base64
 import hmac
@@ -2278,6 +2279,55 @@ def _save_auction_bid(auction_id, email, name, bid):
                   ContentType="application/json")
 
 
+AUC_CLASS_FIELD = "custom_label_3064330"
+AUC_SHARES_FIELD = "custom_label_3070843"
+AUC_CLASS_LABELS = {5077831: "Common", 5077834: "Preferred",
+                    5077912: "Mixed", 5077915: "Any"}
+
+
+def _auction_deal_facts(deal_id, company_name):
+    """Key data points for the seeded deal plus its company. Never raises."""
+    out = {"logo": "", "description": "", "catalyst": "", "share_class": "",
+           "shares": None, "notes": "", "lr_pps": None, "lr_val": None,
+           "lr_series": "", "lr_date": ""}
+    try:
+        norm = re.sub(r"[^a-zA-Z0-9]", "", company_name or "")
+        if norm:
+            out["logo"] = f"https://bannerlogos.s3.us-east-1.amazonaws.com/{norm}.png"
+    except Exception:
+        pass
+    if not deal_id:
+        return out
+    try:
+        jwt = get_jwt()
+        res = call_pipeline_api("GET", f"/deals/{deal_id}.json", jwt=jwt)
+        if res.get("status") != 200 or not isinstance(res.get("data"), dict):
+            return out
+        deal = res["data"]
+        cf = deal.get("custom_fields") or {}
+        out["notes"] = (deal.get("summary") or "").strip()
+        for oid in cf_id_list(cf.get(AUC_CLASS_FIELD)):
+            if oid in AUC_CLASS_LABELS:
+                out["share_class"] = AUC_CLASS_LABELS[oid]
+                break
+        out["shares"] = _auc_num(cf.get(AUC_SHARES_FIELD))
+        co_id = (deal.get("company") or {}).get("id")
+        if co_id:
+            cres = call_pipeline_api("GET", f"/companies/{co_id}.json", jwt=jwt)
+            if cres.get("status") == 200 and isinstance(cres.get("data"), dict):
+                co = cres["data"]
+                ccf = co.get("custom_fields") or {}
+                out["description"] = (co.get("description") or "").strip()
+                out["catalyst"] = (ccf.get("custom_label_3999603") or "").strip()
+                out["lr_pps"] = _auc_num(ccf.get("custom_label_3064363"))
+                out["lr_val"] = _auc_num(ccf.get("custom_label_3790429"))
+                out["lr_series"] = (ccf.get("custom_label_3914626") or "").strip()
+                out["lr_date"] = (ccf.get("custom_label_3826032") or "").strip()
+    except Exception as e:
+        print(f"auction: deal facts failed for {deal_id}: {e}")
+    return out
+
+
 def render_auction(auction_id, client_id, is_admin, err=""):
     auc = (_load_auctions() or {}).get(str(auction_id))
     if not auc:
@@ -2317,6 +2367,38 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     _buyers = _wl_buyers(company) or int(auc.get("buyers") or 0)
     if _buyers:
         stats += stat("Buyers", f"{_buyers:,}")
+
+    facts = _auction_deal_facts(auc.get("deal_id"), company)
+    _f = []
+    if facts["share_class"]:
+        _f.append(("Share class", html.escape(facts["share_class"])))
+    if facts["shares"]:
+        _f.append(("Shares", f"{int(facts['shares']):,}"))
+    if facts["lr_pps"]:
+        _f.append(("Last round PPS", _wl_pps(facts["lr_pps"])))
+    if facts["lr_val"]:
+        _f.append(("Last round val", f"${facts['lr_val']:,.2f}B"))
+    if facts["lr_series"]:
+        _f.append(("Series", html.escape(facts["lr_series"])))
+    if facts["lr_date"]:
+        _f.append(("Round date", html.escape(facts["lr_date"])))
+    facts_rows = "".join(
+        f'<div class="au-frow"><span class="au-flbl">{lbl}</span>'
+        f'<span class="au-fval">{val}</span></div>' for lbl, val in _f)
+    logo_html = (f'<img class="au-logo" src="{html.escape(facts["logo"], quote=True)}" '
+                 f'alt="" onerror="this.style.display=\'none\'">'
+                 if facts["logo"] else "")
+    desc_html = (f'<p class="au-desc">{html.escape(facts["description"])}</p>'
+                 if facts["description"] else "")
+    cat_html = (f'<div class="au-cat"><span class="au-flbl">Recent development</span>'
+                f'<div>{html.escape(facts["catalyst"])}</div></div>'
+                if facts["catalyst"] else "")
+    notes_html = (f'<div class="au-cat"><span class="au-flbl">Seller notes</span>'
+                  f'<div>{html.escape(facts["notes"])}</div></div>'
+                  if facts["notes"] else "")
+    details_html = (f'<div class="au-details">{logo_html}{desc_html}'
+                    f'<div class="au-facts">{facts_rows}</div>{cat_html}{notes_html}</div>'
+                    if (facts_rows or desc_html or cat_html or notes_html or logo_html) else "")
 
     if is_admin:
         rows = ""
@@ -2429,6 +2511,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                 <input name="note" type="text" value="{_nt}"
                        placeholder="e.g. can go higher for the full block"></div>
               <div class="au-full">
+                <div id="au-implied" class="au-implied" style="display:none;"></div>
                 <div id="au-warn" class="au-bad" style="display:none;"></div>
                 <button class="au-beat" type="button" onclick="auBeat()"
                         style="{'' if (top and (not me or (_auc_num(me.get('gross')) or 0) < top)) else 'display:none;'}">
@@ -2470,8 +2553,19 @@ def render_auction(auction_id, client_id, is_admin, err=""):
             var el = document.getElementById('au-price');
             var warn = document.getElementById('au-warn');
             if (!el) {{ return; }}
+            var LRP = {facts["lr_pps"] or 0};
+            var LRV = {facts["lr_val"] or 0};
             function check() {{
               var v = parseFloat((el.value || '').replace(/[^0-9.]/g, ''));
+              var imp = document.getElementById('au-implied');
+              if (LRP > 0 && LRV > 0 && v > 0) {{
+                var b = LRV * (v / LRP);
+                imp.textContent = '≈ $' + (b >= 1 ? b.toFixed(2) + 'B' :
+                  Math.round(b * 1000) + 'M') + ' implied valuation · based on last round, estimate only';
+                imp.style.display = 'block';
+              }} else if (imp) {{
+                imp.style.display = 'none';
+              }}
               if (TOP > 0 && v > 0 && v < TOP) {{
                 el.style.borderColor = '#b45309';
                 warn.textContent = 'This is below the current top bid of ' +
@@ -2525,6 +2619,18 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                  border:none; border-radius:6px; background:var(--ink); color:#fff;
                  cursor:pointer; }}
       .au-price {{ font-size:22px !important; font-weight:600; padding:12px 14px !important; }}
+      .au-details {{ border:1px solid var(--line); border-radius:8px; padding:16px 18px;
+                     margin:0 0 18px; }}
+      .au-logo {{ max-height:38px; max-width:170px; margin-bottom:10px; display:block; }}
+      .au-desc {{ margin:0 0 12px; color:#4b5563; font-size:14px; }}
+      .au-facts {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+                   gap:10px 18px; }}
+      .au-frow {{ display:flex; flex-direction:column; }}
+      .au-flbl {{ font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+                  color:#6b7280; }}
+      .au-fval {{ font-size:15px; font-weight:600; }}
+      .au-cat {{ margin-top:12px; font-size:14px; }}
+      .au-implied {{ color:#1f7a4d; font-size:13px; margin-bottom:8px; }}
       .au-iqf {{ background:#fdf6e7; border:1px solid #f0dfae; border-radius:6px;
                  padding:11px 14px; margin:14px 0 0; font-size:14px; }}
       .wl-h2 {{ font-size:17px; margin:22px 0 10px; }}
@@ -2537,6 +2643,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     <h1>{html.escape(company)}{(" &mdash; " + html.escape(auc.get("structure"))) if auc.get("structure") else ""}</h1>
     {note}
     <div class="au-stats">{stats}</div>
+    {details_html}
     {book}
     """, eyebrow=("Auction: " + company +
                   ((" — " + auc.get("structure")) if auc.get("structure") else "")))
