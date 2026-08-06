@@ -2373,6 +2373,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
           <form method="POST" action="?view=auction&amp;id={html.escape(str(auction_id), quote=True)}">
             <input type="hidden" name="action" value="auction_bid">
             <input type="hidden" name="auction_id" value="{html.escape(str(auction_id), quote=True)}">
+            <input type="hidden" name="as" value="{html.escape(str(client_id), quote=True)}">
             <div class="au-grid">
               <div><label>Your bid ($/share)</label>
                 <input id="au-price" name="gross" type="text" inputmode="decimal"
@@ -2733,7 +2734,8 @@ def lambda_handler(event, context):
             return _json_ok()
         if action == "auction_bid":
             _aid = (form.get("auction_id") or "").strip()
-            _owner = qs["as"] if (is_admin and qs.get("as")) else client_id
+            _as = (form.get("as") or qs.get("as") or "").strip()
+            _owner = _as if (is_admin and _as) else client_id
             _rec = (_people_index().get("by_id", {}) or {}).get(str(_owner)) or {}
             _email = (_rec.get("email") or "").strip().lower()
             _name = (_rec.get("name") or _rec.get("first_name") or "").strip()
