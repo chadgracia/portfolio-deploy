@@ -2226,6 +2226,57 @@ def _load_auction_bids(auction_id):
         return {}
 
 
+AUC_IQF_FIELD = "custom_label_3763008"
+AUC_IQF_OK = {6496840, 6596073}          # Yes, Unnecessary
+AUC_TRANSACTOR_FIELD = "custom_label_3759163"
+AUC_NATURAL_PERSON = 6484810
+IQF_ENTITY_URL = "https://www.rainmakersecurities.com/investor-qualification-form-for-entity-persons"
+IQF_NATURAL_URL = "https://www.rainmakersecurities.com/investor-qualification-form-for-natural-persons"
+
+
+def _auction_iqf(person_id):
+    """(is_cleared, form_url) for one person. Falls back to the entity form."""
+    try:
+        jwt = get_jwt()
+        res = call_pipeline_api("GET", f"/people/{person_id}.json", jwt=jwt)
+        if res.get("status") != 200 or not isinstance(res.get("data"), dict):
+            return False, IQF_ENTITY_URL
+        cf = res["data"].get("custom_fields") or {}
+        cleared = bool(set(cf_id_list(cf.get(AUC_IQF_FIELD))) & AUC_IQF_OK)
+        natural = AUC_NATURAL_PERSON in cf_id_list(cf.get(AUC_TRANSACTOR_FIELD))
+        return cleared, (IQF_NATURAL_URL if natural else IQF_ENTITY_URL)
+    except Exception as e:
+        print(f"auction: IQF lookup failed for {person_id}: {e}")
+        return False, IQF_ENTITY_URL
+
+
+def _save_auction_bid(auction_id, email, name, bid):
+    """Record one bid, keyed by lowercased email so a resubmission replaces it."""
+    key = f"bids/auction_{auction_id}.json"
+    s3 = boto3.client("s3")
+    try:
+        obj = s3.get_object(Bucket=COMPANIES_BUCKET, Key=key)
+        book = json.loads(obj["Body"].read())
+    except Exception:
+        book = {}
+    bids = book.get("bids") or {}
+    ekey = (email or "").strip().lower()
+    if not ekey:
+        return
+    prior = bids.get(ekey) or {}
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    bid["email"] = ekey
+    bid["name"] = name or prior.get("name") or ""
+    bid["updated_at"] = now
+    bid["first_seen"] = prior.get("first_seen") or now
+    bid["revisions"] = int(prior.get("revisions") or 0) + 1
+    bids[ekey] = bid
+    book["bids"] = bids
+    s3.put_object(Bucket=COMPANIES_BUCKET, Key=key,
+                  Body=json.dumps(book, ensure_ascii=False).encode("utf-8"),
+                  ContentType="application/json")
+
+
 def render_auction(auction_id, client_id, is_admin):
     auc = (_load_auctions() or {}).get(str(auction_id))
     if not auc:
@@ -2290,13 +2341,83 @@ def render_auction(auction_id, client_id, is_admin):
         if me:
             my_rank = next((i for i, b in enumerate(ranked, 1)
                             if (b.get("email") or "") == (me.get("email") or "")), None)
-            book = (f'<p>Your bid: <strong>{_wl_pps(me.get("gross"))}</strong> '
-                    f'&middot; ranked <strong>{my_rank} of {len(ranked)}</strong>.</p>')
+            standing = (f'<p>Your bid: <strong>{_wl_pps(me.get("gross"))}</strong> '
+                        f'&middot; ranked <strong>{my_rank} of {len(ranked)}</strong>.</p>')
         elif ranked:
-            book = (f'<p class="wl-soft">{len(ranked)} bids received, ranging from '
-                    f'{_wl_pps(low)} to {_wl_pps(top)} per share. You have not bid yet.</p>')
+            standing = (f'<p class="wl-soft">{len(ranked)} bids received, ranging from '
+                        f'{_wl_pps(low)} to {_wl_pps(top)} per share. You have not bid yet.</p>')
         else:
-            book = '<p class="wl-soft">No bids have been placed yet.</p>'
+            standing = '<p class="wl-soft">No bids have been placed yet. Be the first.</p>'
+
+        cleared, iqf_url = _auction_iqf(client_id)
+        if cleared:
+            iqf_html = '<p class="au-ok">&#10003; Investor Qualification Form on file.</p>'
+        else:
+            iqf_html = ('<p class="au-bad">&#10007; No Investor Qualification Form on file. '
+                        f'<a href="{iqf_url}" target="_blank">Complete it here</a> &mdash; '
+                        'we cannot settle a trade without it.</p>')
+
+        _pv = me.get("gross") if me else ""
+        _mn = me.get("min_size") if me else auc.get("min_size")
+        _mx = me.get("max_size") if me else auc.get("max_size")
+        _nt = html.escape(str(me.get("note") or ""), quote=True) if me else ""
+        _coh = (me or {}).get("cash_on_hand")
+        book = f"""
+        {standing}
+        {iqf_html}
+        <div class="au-box">
+          <h2 class="wl-h2">{'Update your bid' if me else 'Place a bid'}</h2>
+          <form method="POST" action="?view=auction&amp;id={html.escape(str(auction_id), quote=True)}">
+            <input type="hidden" name="action" value="auction_bid">
+            <input type="hidden" name="auction_id" value="{html.escape(str(auction_id), quote=True)}">
+            <div class="au-grid">
+              <div><label>Your bid ($/share)</label>
+                <input id="au-price" name="gross" type="text" inputmode="decimal"
+                       value="{html.escape(str(_pv or ''), quote=True)}" required></div>
+              <div><label>Min size ($)</label>
+                <input name="min_size" type="text" inputmode="numeric"
+                       value="{html.escape(str(int(_mn)) if _mn else '', quote=True)}"></div>
+              <div><label>Max size ($)</label>
+                <input name="max_size" type="text" inputmode="numeric"
+                       value="{html.escape(str(int(_mx)) if _mx else '', quote=True)}"></div>
+              <div><label title="If you plan to syndicate this allocation rather than fund it yourself, select No.">Cash on hand</label>
+                <select name="cash_on_hand">
+                  <option value="yes"{' selected' if _coh == 'yes' else ''}>Yes &mdash; funded</option>
+                  <option value="no"{' selected' if _coh == 'no' else ''}>No &mdash; will syndicate</option>
+                </select></div>
+              <div class="au-full"><label>Notes (optional)</label>
+                <input name="note" type="text" value="{_nt}"
+                       placeholder="e.g. can go higher for the full block"></div>
+              <div class="au-full">
+                <div id="au-warn" class="au-bad" style="display:none;"></div>
+                <button class="au-btn" type="submit">{'Update bid' if me else 'Submit bid'}</button>
+              </div>
+            </div>
+          </form>
+        </div>
+        <script>
+          (function () {{
+            var TOP = {top or 0};
+            var el = document.getElementById('au-price');
+            var warn = document.getElementById('au-warn');
+            if (!el) {{ return; }}
+            function check() {{
+              var v = parseFloat((el.value || '').replace(/[^0-9.]/g, ''));
+              if (TOP > 0 && v > 0 && v < TOP) {{
+                el.style.borderColor = '#b45309';
+                warn.textContent = 'This is below the current top bid of ' +
+                  TOP.toLocaleString('en-US', {{style:'currency', currency:'USD'}}) + '.';
+                warn.style.display = 'block';
+              }} else {{
+                el.style.borderColor = '';
+                warn.style.display = 'none';
+              }}
+            }}
+            el.addEventListener('input', check);
+            check();
+          }})();
+        </script>
+        """
 
     note = (f'<p class="au-note">{html.escape(auc.get("note") or "")}</p>'
             if auc.get("note") else "")
@@ -2309,6 +2430,20 @@ def render_auction(auction_id, client_id, is_admin):
                  color:#6b7280; margin-bottom:3px; }}
       .au-val {{ font-size:19px; font-weight:600; }}
       .au-note {{ font-style:italic; color:#6b7280; margin:0 0 16px; }}
+      .au-ok {{ color:#1f7a4d; font-weight:600; }}
+      .au-bad {{ color:#b45309; font-weight:600; }}
+      .au-box {{ border:1px solid var(--line); border-radius:8px; padding:16px 18px;
+                 margin-top:18px; }}
+      .au-grid {{ display:grid; grid-template-columns:repeat(2,minmax(180px,1fr));
+                  gap:12px 16px; }}
+      .au-grid label {{ display:block; font-size:13px; font-weight:600; margin-bottom:4px; }}
+      .au-grid input, .au-grid select {{ width:100%; padding:9px 12px; font-family:inherit;
+                                         font-size:14px; border:1px solid var(--line);
+                                         border-radius:6px; }}
+      .au-full {{ grid-column:1 / -1; }}
+      .au-btn {{ padding:10px 22px; font-family:inherit; font-size:14px; font-weight:600;
+                 border:none; border-radius:6px; background:var(--ink); color:#fff;
+                 cursor:pointer; }}
       .wl-h2 {{ font-size:17px; margin:22px 0 10px; }}
       .wl-soft {{ color:#6b7280; }}
       table.auc {{ width:100%; border-collapse:collapse; font-size:14px; }}
@@ -2593,6 +2728,30 @@ def lambda_handler(event, context):
             invited["invited_email"] = email
             save_portfolio(invited)
             return _json_ok()
+        if action == "auction_bid":
+            _aid = (form.get("auction_id") or "").strip()
+            _owner = qs["as"] if (is_admin and qs.get("as")) else client_id
+            _rec = (_people_index().get("by_id", {}) or {}).get(str(_owner)) or {}
+            _email = (_rec.get("email") or "").strip().lower()
+            _name = (_rec.get("name") or _rec.get("first_name") or "").strip()
+            if _aid and _email:
+                _bid = {
+                    "gross": _auc_num(form.get("gross")),
+                    "min_size": _auc_num(form.get("min_size")),
+                    "max_size": _auc_num(form.get("max_size")),
+                    "cash_on_hand": "no" if (form.get("cash_on_hand") == "no") else "yes",
+                    "note": (form.get("note") or "").strip(),
+                    "person_id": str(_owner),
+                }
+                try:
+                    _save_auction_bid(_aid, _email, _name, _bid)
+                except Exception as e:
+                    print(f"auction_bid: save failed: {e}")
+            _back = raw_path + "?view=auction&id=" + urllib.parse.quote(_aid)
+            if is_admin and qs.get("as"):
+                _back += "&as=" + urllib.parse.quote(qs["as"])
+            return {"statusCode": 303, "headers": {"Location": _back}, "body": ""}
+
         if action == "auction_create":
             if not is_admin:
                 return {"statusCode": 403,
