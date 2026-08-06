@@ -2196,6 +2196,7 @@ def render_auctions_admin(msg=""):
         <div><label>Ask price per share</label><input name="ask" placeholder="110"></div>
         <div><label>Shares (optional)</label><input name="shares" placeholder="100000"></div>
         <div><label>Structure</label><input name="structure" placeholder="Direct Transfer"></div>
+        <div><label>Bids close (blank = open-ended)</label><input name="close_date" type="date"></div>
         <div><label>Buyers in book</label><input name="buyers" placeholder="20"></div>
         <div><label>Min size ($)</label><input name="min_size" placeholder="250000"></div>
         <div><label>Max size ($)</label><input name="max_size" placeholder="10000000"></div>
@@ -2319,7 +2320,18 @@ def render_auction(auction_id, client_id, is_admin, err=""):
 
     if is_admin:
         rows = ""
+        demand = 0.0
         for i, b in enumerate(ranked, 1):
+            mx = _auc_num(b.get("max_size")) or 0
+            demand += mx
+            if b.get("person_id"):
+                cleared, _ = _auction_iqf(b["person_id"])
+            else:
+                cleared = False
+            iqf_cell = ('<span class="au-ok">&#10003;</span>' if cleared
+                        else '<span class="au-bad">&#10007;</span>')
+            funded = (b.get("cash_on_hand") or "yes") == "yes"
+            fund_cell = "Funded" if funded else '<span class="au-bad">Syndicating</span>'
             rows += (
                 "<tr>"
                 f"<td>{i}</td>"
@@ -2327,22 +2339,36 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                 f'<td>{html.escape(b.get("email") or "")}</td>'
                 f'<td><strong>{_wl_pps(b.get("gross"))}</strong></td>'
                 f'<td>{_wl_money(b.get("min_size"))} &ndash; {_wl_money(b.get("max_size"))}</td>'
-                f'<td>{html.escape(", ".join(b.get("structure") or []))}</td>'
+                f'<td>{iqf_cell}</td>'
+                f'<td>{fund_cell}</td>'
+                f'<td class="wl-soft">{html.escape(b.get("note") or "")}</td>'
                 f'<td>{html.escape((b.get("updated_at") or "")[:10])}</td>'
                 "</tr>"
             )
         if not rows:
-            rows = '<tr><td colspan="7" class="wl-soft">No bids yet.</td></tr>'
+            rows = '<tr><td colspan="9" class="wl-soft">No bids yet.</td></tr>'
+        dem_line = (f'<p class="wl-soft">Total demand at max size: '
+                    f'<strong>{_wl_money(demand)}</strong> across {len(ranked)} '
+                    f'bid{"" if len(ranked) == 1 else "s"}.</p>') if ranked else ""
         book = ('<h2 class="wl-h2">Order book</h2>'
+                + dem_line +
                 '<table class="auc"><thead><tr><th>#</th><th>Name</th><th>Email</th>'
-                '<th>Bid</th><th>Size</th><th>Structure</th><th>Updated</th></tr></thead>'
+                '<th>Bid</th><th>Size</th><th>IQF</th><th>Funding</th><th>Notes</th>'
+                '<th>Updated</th></tr></thead>'
                 f'<tbody>{rows}</tbody></table>')
     else:
         if me:
             my_rank = next((i for i, b in enumerate(ranked, 1)
                             if (b.get("email") or "") == (me.get("email") or "")), None)
-            standing = (f'<p>Your bid: <strong>{_wl_pps(me.get("gross"))}</strong> '
-                        f'&middot; ranked <strong>{my_rank} of {len(ranked)}</strong>.</p>')
+            _mine = _auc_num(me.get("gross")) or 0
+            if my_rank == 1:
+                standing = (f'<p class="au-lead">You hold the top bid at '
+                            f'<strong>{_wl_pps(me.get("gross"))}</strong> '
+                            f'of {len(ranked)} bid{"" if len(ranked) == 1 else "s"}.</p>')
+            else:
+                standing = (f'<p class="au-bad">You have been outbid. Your bid is '
+                            f'{_wl_pps(me.get("gross"))}, ranked {my_rank} of {len(ranked)}. '
+                            f'The top bid is {_wl_pps(top)}.</p>')
         elif ranked:
             standing = (f'<p class="wl-soft">{len(ranked)} bids received, ranging from '
                         f'{_wl_pps(low)} to {_wl_pps(top)} per share. You have not bid yet.</p>')
@@ -2394,6 +2420,10 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                        placeholder="e.g. can go higher for the full block"></div>
               <div class="au-full">
                 <div id="au-warn" class="au-bad" style="display:none;"></div>
+                <button class="au-beat" type="button" onclick="auBeat()"
+                        style="{'' if (top and (not me or (_auc_num(me.get('gross')) or 0) < top)) else 'display:none;'}">
+                  Beat the top bid
+                </button>
                 <button class="au-btn" type="submit">{'Update bid' if me else 'Submit bid'}</button>
               </div>
             </div>
@@ -2444,12 +2474,18 @@ def render_auction(auction_id, client_id, is_admin, err=""):
             }}
             el.addEventListener('input', check);
             check();
+            window.auBeat = function () {{
+              if (TOP > 0) {{ el.value = (TOP + 1).toFixed(2); check(); el.focus(); }}
+            }};
           }})();
         </script>
         """
 
     note = (f'<p class="au-note">{html.escape(auc.get("note") or "")}</p>'
             if auc.get("note") else "")
+    if auc.get("close_date"):
+        note = (f'<p class="au-deadline">Bids close {html.escape(auc["close_date"])}.</p>'
+                + note)
 
     return html_response(f"""
     <style>
@@ -2461,6 +2497,11 @@ def render_auction(auction_id, client_id, is_admin, err=""):
       .au-note {{ font-style:italic; color:#6b7280; margin:0 0 16px; }}
       .au-ok {{ color:#1f7a4d; font-weight:600; }}
       .au-bad {{ color:#b45309; font-weight:600; }}
+      .au-lead {{ color:#1f7a4d; font-weight:600; }}
+      .au-deadline {{ font-weight:600; margin:0 0 6px; }}
+      .au-beat {{ margin-right:10px; padding:10px 18px; font-family:inherit;
+                  font-size:14px; font-weight:600; border:1px solid var(--ink);
+                  border-radius:6px; background:#fff; color:var(--ink); cursor:pointer; }}
       .au-box {{ border:1px solid var(--line); border-radius:8px; padding:16px 18px;
                  margin-top:18px; }}
       .au-grid {{ display:grid; grid-template-columns:repeat(2,minmax(180px,1fr));
@@ -2801,6 +2842,7 @@ def lambda_handler(event, context):
                 "ask": _auc_num(form.get("ask")),
                 "shares": _auc_num(form.get("shares")),
                 "structure": (form.get("structure") or "").strip(),
+                "close_date": (form.get("close_date") or "").strip(),
                 "buyers": _auc_num(form.get("buyers")),
                 "min_size": _auc_num(form.get("min_size")),
                 "max_size": _auc_num(form.get("max_size")),
