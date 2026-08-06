@@ -2195,6 +2195,119 @@ def render_auctions_admin(msg=""):
     """)
 
 
+def _auction_bids_key(auction_id):
+    return f"bids/auction_{auction_id}.json"
+
+
+def _load_auction_bids(auction_id):
+    """Bid book for one auction, keyed by lowercased email. Never raises."""
+    try:
+        obj = boto3.client("s3").get_object(Bucket=COMPANIES_BUCKET,
+                                            Key=_auction_bids_key(auction_id))
+        data = json.loads(obj["Body"].read())
+        return data.get("bids") or {}
+    except Exception:
+        return {}
+
+
+def render_auction(auction_id, client_id, is_admin):
+    auc = (_load_auctions() or {}).get(str(auction_id))
+    if not auc:
+        return html_response("<h1>Auction not found</h1>"
+                             "<p class='wl-soft'>This link may have expired.</p>")
+
+    company = auc.get("company") or ""
+    bids = _load_auction_bids(auction_id)
+    ranked = sorted(bids.values(),
+                    key=lambda b: (-(_auc_num(b.get("gross")) or 0),
+                                   b.get("updated_at") or ""))
+
+    me = None
+    try:
+        _idx = (_people_index().get("by_id", {}) or {}).get(str(client_id)) or {}
+        my_email = (_idx.get("email") or "").strip().lower()
+        if my_email:
+            me = bids.get(my_email)
+    except Exception as e:
+        print(f"auction: could not resolve viewer email: {e}")
+
+    top = _auc_num(ranked[0].get("gross")) if ranked else None
+    low = _auc_num(ranked[-1].get("gross")) if ranked else None
+    holders = _wl_holders(company)
+
+    def stat(label, value):
+        return (f'<div class="au-stat"><div class="au-lbl">{label}</div>'
+                f'<div class="au-val">{value}</div></div>')
+
+    stats = (
+        stat("Ask", _wl_pps(auc.get("ask")) if auc.get("ask") else "&mdash;")
+        + stat("Size", (f'{_wl_money(auc.get("min_size"))} &ndash; '
+                        f'{_wl_money(auc.get("max_size"))}')
+               if auc.get("min_size") else "&mdash;")
+        + stat("Bids in", str(len(ranked)))
+        + stat("Top bid", _wl_pps(top) if top else "&mdash;")
+    )
+    if holders:
+        stats += stat("Holders known", f"{holders:,}")
+
+    if is_admin:
+        rows = ""
+        for i, b in enumerate(ranked, 1):
+            rows += (
+                "<tr>"
+                f"<td>{i}</td>"
+                f'<td>{html.escape(b.get("name") or "")}</td>'
+                f'<td>{html.escape(b.get("email") or "")}</td>'
+                f'<td><strong>{_wl_pps(b.get("gross"))}</strong></td>'
+                f'<td>{_wl_money(b.get("min_size"))} &ndash; {_wl_money(b.get("max_size"))}</td>'
+                f'<td>{html.escape(", ".join(b.get("structure") or []))}</td>'
+                f'<td>{html.escape((b.get("updated_at") or "")[:10])}</td>'
+                "</tr>"
+            )
+        if not rows:
+            rows = '<tr><td colspan="7" class="wl-soft">No bids yet.</td></tr>'
+        book = ('<h2 class="wl-h2">Order book</h2>'
+                '<table class="auc"><thead><tr><th>#</th><th>Name</th><th>Email</th>'
+                '<th>Bid</th><th>Size</th><th>Structure</th><th>Updated</th></tr></thead>'
+                f'<tbody>{rows}</tbody></table>')
+    else:
+        if me:
+            my_rank = next((i for i, b in enumerate(ranked, 1)
+                            if (b.get("email") or "") == (me.get("email") or "")), None)
+            book = (f'<p>Your bid: <strong>{_wl_pps(me.get("gross"))}</strong> '
+                    f'&middot; ranked <strong>{my_rank} of {len(ranked)}</strong>.</p>')
+        elif ranked:
+            book = (f'<p class="wl-soft">{len(ranked)} bids received, ranging from '
+                    f'{_wl_pps(low)} to {_wl_pps(top)} per share. You have not bid yet.</p>')
+        else:
+            book = '<p class="wl-soft">No bids have been placed yet.</p>'
+
+    note = (f'<p class="au-note">{html.escape(auc.get("note") or "")}</p>'
+            if auc.get("note") else "")
+
+    return html_response(f"""
+    <style>
+      .au-stats {{ display:flex; flex-wrap:wrap; gap:26px; margin:16px 0 20px;
+                   padding:16px 18px; background:#f8f9fa; border-radius:8px; }}
+      .au-lbl {{ font-size:11px; letter-spacing:.07em; text-transform:uppercase;
+                 color:#6b7280; margin-bottom:3px; }}
+      .au-val {{ font-size:19px; font-weight:600; }}
+      .au-note {{ font-style:italic; color:#6b7280; margin:0 0 16px; }}
+      .wl-h2 {{ font-size:17px; margin:22px 0 10px; }}
+      .wl-soft {{ color:#6b7280; }}
+      table.auc {{ width:100%; border-collapse:collapse; font-size:14px; }}
+      table.auc th, table.auc td {{ border:1px solid #ddd; padding:10px 12px;
+                                    text-align:left; }}
+      table.auc th {{ font-size:12px; letter-spacing:.06em; text-transform:uppercase; }}
+    </style>
+    <h1>{html.escape(company)}</h1>
+    <p class="sub">Live bidding. Highest firm bid wins the allocation.</p>
+    {note}
+    <div class="au-stats">{stats}</div>
+    {book}
+    """)
+
+
 def render_watchlist_status(client_id):
     """Client-facing watchlist: their interests with actionable status. No name shown."""
     try:
@@ -2545,6 +2658,8 @@ def lambda_handler(event, context):
         return {"statusCode": 303, "headers": {"Location": raw_path}, "body": ""}
 
     view_id = qs["as"] if (is_admin and qs.get("as")) else client_id
+    if qs.get("view") == "auction" and qs.get("id"):
+        return render_auction(qs["id"], view_id, is_admin)
     if qs.get("view") == "auctions" and is_admin:
         return render_auctions_admin()
     if qs.get("view") == "link" and is_admin:
