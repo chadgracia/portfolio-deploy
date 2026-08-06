@@ -2401,6 +2401,31 @@ def render_auction(auction_id, client_id, is_admin, err=""):
         </div>
         <script>
           (function () {{
+            // Live thousands separators on the size fields — six-figure sizes are
+            // unreadable otherwise. The server strips commas, so the value still posts.
+            function commafy(box) {{
+              var before = (box.value || '').slice(0, box.selectionStart || 0)
+                             .replace(/[^0-9]/g, '').length;
+              var raw = (box.value || '').replace(/[^0-9]/g, '');
+              var out = raw ? Number(raw).toLocaleString('en-US') : '';
+              if (out === box.value) {{ return; }}
+              box.value = out;
+              var seen = 0, pos = 0;
+              while (pos < out.length && seen < before) {{
+                var c = out.charCodeAt(pos);
+                if (c >= 48 && c <= 57) {{ seen++; }}
+                pos++;
+              }}
+              try {{ box.setSelectionRange(pos, pos); }} catch (e) {{}}
+            }}
+            Array.prototype.forEach.call(
+              document.querySelectorAll('.au-grid input[name="min_size"], '
+                                        + '.au-grid input[name="max_size"]'),
+              function (box) {{
+                box.addEventListener('input', function () {{ commafy(box); }});
+                commafy(box);
+              }});
+
             var TOP = {top or 0};
             var el = document.getElementById('au-price');
             var warn = document.getElementById('au-warn');
