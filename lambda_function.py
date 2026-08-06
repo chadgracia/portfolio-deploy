@@ -1977,6 +1977,20 @@ def _wl_json(bucket, key, default):
         return default
 
 
+def _wl_buyers(name):
+    """People carrying this company in their Buy Interest field, from holder_counts.json."""
+    data = _wl_json(COMPANIES_BUCKET, WL_HOLDERS_KEY, {})
+    if isinstance(data, dict):
+        counts = data.get("buy_counts") or {}
+        for k, v in counts.items():
+            if str(k).strip().lower() == (name or "").strip().lower():
+                try:
+                    return int(v)
+                except (TypeError, ValueError):
+                    return 0
+    return 0
+
+
 def _wl_holders(name):
     data = _wl_json(COMPANIES_BUCKET, WL_HOLDERS_KEY, {})
     if isinstance(data, dict):
@@ -2249,8 +2263,9 @@ def render_auction(auction_id, client_id, is_admin):
         + stat("Bids in", str(len(ranked)))
         + stat("Top bid", _wl_pps(top) if top else "&mdash;")
     )
-    if auc.get("buyers"):
-        stats += stat("Buyers", f"{int(auc['buyers']):,}")
+    _buyers = _wl_buyers(company) or int(auc.get("buyers") or 0)
+    if _buyers:
+        stats += stat("Buyers", f"{_buyers:,}")
 
     if is_admin:
         rows = ""
