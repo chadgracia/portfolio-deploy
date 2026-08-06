@@ -2181,6 +2181,8 @@ def render_auctions_admin(msg=""):
         <div><label>Seed deal ID (optional)</label><input name="deal_id" placeholder="55266875"></div>
         <div><label>Ask price per share</label><input name="ask" placeholder="110"></div>
         <div><label>Shares (optional)</label><input name="shares" placeholder="100000"></div>
+        <div><label>Structure</label><input name="structure" placeholder="Direct Transfer"></div>
+        <div><label>Buyers in book</label><input name="buyers" placeholder="20"></div>
         <div><label>Min size ($)</label><input name="min_size" placeholder="250000"></div>
         <div><label>Max size ($)</label><input name="max_size" placeholder="10000000"></div>
         <div class="auc-full"><label>Note to buyers (optional)</label>
@@ -2247,8 +2249,8 @@ def render_auction(auction_id, client_id, is_admin):
         + stat("Bids in", str(len(ranked)))
         + stat("Top bid", _wl_pps(top) if top else "&mdash;")
     )
-    if holders:
-        stats += stat("Holders known", f"{holders:,}")
+    if auc.get("buyers"):
+        stats += stat("Buyers", f"{int(auc['buyers']):,}")
 
     if is_admin:
         rows = ""
@@ -2300,7 +2302,7 @@ def render_auction(auction_id, client_id, is_admin):
                                     text-align:left; }}
       table.auc th {{ font-size:12px; letter-spacing:.06em; text-transform:uppercase; }}
     </style>
-    <h1>{html.escape(company)}</h1>
+    <h1>{html.escape(company)}{(" &mdash; " + html.escape(auc.get("structure"))) if auc.get("structure") else ""}</h1>
     <p class="sub">Live bidding. Highest firm bid wins the allocation.</p>
     {note}
     <div class="au-stats">{stats}</div>
@@ -2589,6 +2591,8 @@ def lambda_handler(event, context):
                 "deal_id": (form.get("deal_id") or "").strip(),
                 "ask": _auc_num(form.get("ask")),
                 "shares": _auc_num(form.get("shares")),
+                "structure": (form.get("structure") or "").strip(),
+                "buyers": _auc_num(form.get("buyers")),
                 "min_size": _auc_num(form.get("min_size")),
                 "max_size": _auc_num(form.get("max_size")),
                 "note": (form.get("note") or "").strip(),
@@ -2659,7 +2663,7 @@ def lambda_handler(event, context):
 
     view_id = qs["as"] if (is_admin and qs.get("as")) else client_id
     if qs.get("view") == "auction" and qs.get("id"):
-        return render_auction(qs["id"], view_id, is_admin)
+        return render_auction(qs["id"], view_id, is_admin and not qs.get("as"))
     if qs.get("view") == "auctions" and is_admin:
         return render_auctions_admin()
     if qs.get("view") == "link" and is_admin:
