@@ -2370,8 +2370,13 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                             f'{_wl_pps(me.get("gross"))}, ranked {my_rank} of {len(ranked)}. '
                             f'The top bid is {_wl_pps(top)}.</p>')
         elif ranked:
-            standing = (f'<p class="wl-soft">{len(ranked)} bids received, ranging from '
-                        f'{_wl_pps(low)} to {_wl_pps(top)} per share. You have not bid yet.</p>')
+            if len(ranked) == 1:
+                standing = (f'<p class="wl-soft">One bid received, at {_wl_pps(top)} '
+                            f'per share. You have not bid yet.</p>')
+            else:
+                standing = (f'<p class="wl-soft">{len(ranked)} bids received, ranging from '
+                            f'{_wl_pps(low)} to {_wl_pps(top)} per share. '
+                            f'You have not bid yet.</p>')
         else:
             standing = '<p class="wl-soft">No bids have been placed yet. Be the first.</p>'
 
@@ -2379,9 +2384,10 @@ def render_auction(auction_id, client_id, is_admin, err=""):
         if cleared:
             iqf_html = '<p class="au-ok">&#10003; Investor Qualification Form on file.</p>'
         else:
-            iqf_html = ('<p class="au-bad">&#10007; No Investor Qualification Form on file. '
-                        f'<a href="{iqf_url}" target="_blank">Complete it here</a> &mdash; '
-                        'we cannot settle a trade without it.</p>')
+            iqf_html = ('<p class="au-iqf">Before we can settle a trade, we need your '
+                        f'Investor Qualification Form. <a href="{iqf_url}" target="_blank">'
+                        'Complete it here</a> &mdash; it takes a few minutes and clears you '
+                        'for this and any future allocation.</p>')
 
         _pv = me.get("gross") if me else ""
         _mn = me.get("min_size") if me else auc.get("min_size")
@@ -2401,8 +2407,9 @@ def render_auction(auction_id, client_id, is_admin, err=""):
             <input type="hidden" name="auction_id" value="{html.escape(str(auction_id), quote=True)}">
             <input type="hidden" name="as" value="{html.escape(str(client_id), quote=True)}">
             <div class="au-grid">
-              <div><label>Your bid ($/share)</label>
-                <input id="au-price" name="gross" type="text" inputmode="decimal"
+              <div class="au-full"><label>Your bid ($/share)</label>
+                <input id="au-price" class="au-price" name="gross" type="text"
+                       inputmode="decimal" placeholder="0.00"
                        value="{html.escape(str(_pv or ''), quote=True)}" required></div>
               <div><label>Min size ($)</label>
                 <input name="min_size" type="text" inputmode="numeric"
@@ -2511,9 +2518,12 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                                          font-size:14px; border:1px solid var(--line);
                                          border-radius:6px; }}
       .au-full {{ grid-column:1 / -1; }}
-      .au-btn {{ padding:10px 22px; font-family:inherit; font-size:14px; font-weight:600;
+      .au-btn {{ padding:11px 24px; font-family:inherit; font-size:15px; font-weight:600;
                  border:none; border-radius:6px; background:var(--ink); color:#fff;
                  cursor:pointer; }}
+      .au-price {{ font-size:22px !important; font-weight:600; padding:12px 14px !important; }}
+      .au-iqf {{ background:#fdf6e7; border:1px solid #f0dfae; border-radius:6px;
+                 padding:11px 14px; margin:14px 0 0; font-size:14px; }}
       .wl-h2 {{ font-size:17px; margin:22px 0 10px; }}
       .wl-soft {{ color:#6b7280; }}
       table.auc {{ width:100%; border-collapse:collapse; font-size:14px; }}
