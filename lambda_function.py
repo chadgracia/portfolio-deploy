@@ -1618,7 +1618,7 @@ DISCLOSURE_HTML = """
     </footer>"""
 
 
-def html_response(body_html, status=200):
+def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist"):
     return {
         "statusCode": status,
         "headers": {"Content-Type": "text/html; charset=utf-8"},
@@ -1837,7 +1837,7 @@ def html_response(body_html, status=200):
 <body>
   <div class="card">
     {TOPNAV_HTML}
-    <div class="logo">Private Secondaries Watchlist</div>
+    <div class="logo">{html.escape(eyebrow)}</div>
     {body_html}
     {DISCLOSURE_HTML}
   </div>
@@ -2383,11 +2383,14 @@ def render_auction(auction_id, client_id, is_admin, err=""):
         cleared, iqf_url = _auction_iqf(client_id)
         if cleared:
             iqf_html = '<p class="au-ok">&#10003; Investor Qualification Form on file.</p>'
-        else:
-            iqf_html = ('<p class="au-iqf">Before we can settle a trade, we need your '
-                        f'Investor Qualification Form. <a href="{iqf_url}" target="_blank">'
+        elif me:
+            iqf_html = ('<p class="au-iqf">Your bid is in. We can only present bids from '
+                        'verified accredited investors, so the next step is your Investor '
+                        f'Qualification Form. <a href="{iqf_url}" target="_blank">'
                         'Complete it here</a> &mdash; it takes a few minutes and clears you '
                         'for this and any future allocation.</p>')
+        else:
+            iqf_html = ""
 
         _pv = me.get("gross") if me else ""
         _mn = me.get("min_size") if me else auc.get("min_size")
@@ -2532,11 +2535,11 @@ def render_auction(auction_id, client_id, is_admin, err=""):
       table.auc th {{ font-size:12px; letter-spacing:.06em; text-transform:uppercase; }}
     </style>
     <h1>{html.escape(company)}{(" &mdash; " + html.escape(auc.get("structure"))) if auc.get("structure") else ""}</h1>
-    <p class="sub">Live bidding. Highest firm bid wins the allocation.</p>
     {note}
     <div class="au-stats">{stats}</div>
     {book}
-    """)
+    """, eyebrow=("Auction: " + company +
+                  ((" — " + auc.get("structure")) if auc.get("structure") else "")))
 
 
 def render_watchlist_status(client_id):
