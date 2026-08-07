@@ -2230,6 +2230,78 @@ def _load_auction_bids(auction_id):
         return {}
 
 
+def _load_auction_alerts(auction_id):
+    """Alert subscribers for one auction, keyed by lowercased email. Never raises."""
+    try:
+        obj = boto3.client("s3").get_object(Bucket=COMPANIES_BUCKET,
+                                            Key=_auction_bids_key(auction_id))
+        data = json.loads(obj["Body"].read())
+        return data.get("alerts") or {}
+    except Exception:
+        return {}
+
+
+def _set_auction_alert(auction_id, email, person_id, name, on):
+    """Turn top-bid alerts on/off for one person. Lives in the same bids file."""
+    key = _auction_bids_key(auction_id)
+    s3 = boto3.client("s3")
+    try:
+        obj = s3.get_object(Bucket=COMPANIES_BUCKET, Key=key)
+        book = json.loads(obj["Body"].read())
+    except Exception:
+        book = {}
+    alerts = book.get("alerts") or {}
+    ekey = (email or "").strip().lower()
+    if not ekey:
+        return
+    if on:
+        alerts[ekey] = {"pid": str(person_id), "name": name or ""}
+    else:
+        alerts.pop(ekey, None)
+    book["alerts"] = alerts
+    s3.put_object(Bucket=COMPANIES_BUCKET, Key=key,
+                  Body=json.dumps(book, ensure_ascii=False).encode("utf-8"),
+                  ContentType="application/json")
+
+
+def _auction_bid_notifications(auction_id, bidder_email, bidder_name, gross,
+                               prior_top, base_url):
+    """After a saved bid: always tell Chad; if the top bid rose, email subscribers."""
+    auc = (_load_auctions() or {}).get(str(auction_id)) or {}
+    company = auc.get("company") or "the company"
+    _notify_chad(
+        f"[Auction] New bid - {company} - {_wl_pps(gross)}",
+        (f"Bidder:  {bidder_name} <{bidder_email}>\n"
+         f"Bid:     {_wl_pps(gross)}/share\n"
+         f"Company: {company}\n"
+         f"Auction: {auction_id}\n"
+         f"Prior top bid: {_wl_pps(prior_top) if prior_top else 'none'}\n"),
+    )
+    if not (gross and gross > (prior_top or 0)):
+        return
+    aid_q = urllib.parse.quote(str(auction_id))
+    for ekey, sub in (_load_auction_alerts(auction_id) or {}).items():
+        if ekey == (bidder_email or "").strip().lower():
+            continue
+        pid = (sub or {}).get("pid") or ""
+        if not pid:
+            continue
+        link = (f"{base_url}/?client={pid}&token={make_token(str(pid))}"
+                f"&view=auction&id={aid_q}")
+        first = ((sub or {}).get("name") or "").strip().split(" ")[0] or "there"
+        _send_email(
+            ekey,
+            f"New top bid on {company}: {_wl_pps(gross)}/share",
+            (f"Hi {first},\n\n"
+             f"The top bid on {company} just moved to {_wl_pps(gross)} per share.\n\n"
+             "If you want the block, you can raise your bid here:\n"
+             f"{link}\n\n"
+             "You're receiving this because you asked to be alerted when the top "
+             "bid changes. You can turn alerts off on the same page.\n\n"
+             "Chad Gracia\nRainmaker Securities\n"),
+        )
+
+
 AUC_IQF_FIELD = "custom_label_3763008"
 AUC_IQF_OK = {6496840, 6596073}          # Yes, Unnecessary
 AUC_TRANSACTOR_FIELD = "custom_label_3759163"
@@ -2570,6 +2642,21 @@ def render_auction(auction_id, client_id, is_admin, err=""):
         _coh = (me or {}).get("cash_on_hand")
         _err_html = ('<p class="au-bad">That bid wasn\'t saved &mdash; enter a number '
                      'greater than 0, e.g. 118.50.</p>') if err == "bid" else ""
+        try:
+            _alert_on = bool(my_email) and my_email in (_load_auction_alerts(auction_id) or {})
+        except Exception:
+            _alert_on = False
+        _alert_label = ('&#128276; Alerts on &mdash; email me when the top bid changes. Turn off'
+                        if _alert_on else
+                        '&#128276; Alert me when the top bid changes')
+        _alert_html = (
+            f'<form method="POST" action="?view=auction&amp;id={html.escape(str(auction_id), quote=True)}" class="au-alertform">'
+            '<input type="hidden" name="action" value="auction_alert">'
+            f'<input type="hidden" name="auction_id" value="{html.escape(str(auction_id), quote=True)}">'
+            f'<input type="hidden" name="as" value="{html.escape(str(client_id), quote=True)}">'
+            f'<input type="hidden" name="alerts" value="{"off" if _alert_on else "on"}">'
+            f'<button class="au-alert" type="submit">{_alert_label}</button>'
+            '</form>')
         book = f"""
         {standing}
         {iqf_html}
@@ -2613,6 +2700,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
               </div>
             </div>
           </form>
+          {_alert_html}
         </div>
         <script>
           (function () {{
@@ -2696,6 +2784,11 @@ def render_auction(auction_id, client_id, is_admin, err=""):
       .au-bad {{ color:#b45309; font-weight:600; }}
       .au-lead {{ color:#1f7a4d; font-weight:600; }}
       .au-deadline {{ font-weight:600; margin:0 0 6px; }}
+      .au-alertform {{ margin-top:12px; }}
+      .au-alert {{ width:100%; padding:9px 12px; font-family:inherit; font-size:13px;
+                   font-weight:600; background:#f8f9fa; color:#374151;
+                   border:1px solid #d1d5db; border-radius:6px; cursor:pointer; }}
+      .au-alert:hover {{ background:#eef1f4; }}
       .au-beat {{ margin-right:10px; padding:10px 18px; font-family:inherit;
                   font-size:14px; font-weight:600; border:1px solid var(--ink);
                   border-radius:6px; background:#fff; color:var(--ink); cursor:pointer; }}
@@ -3083,15 +3176,42 @@ def lambda_handler(event, context):
                     "note": (form.get("note") or "").strip(),
                     "person_id": str(_owner),
                 }
+                _prior_bids = _load_auction_bids(_aid)
+                _prior_top = max((_auc_num(b.get("gross")) or 0
+                                  for b in _prior_bids.values()), default=0)
                 try:
                     _save_auction_bid(_aid, _email, _name, _bid)
                 except Exception as e:
                     print(f"auction_bid: save failed: {e}")
+                try:
+                    _bu = "https://" + event["requestContext"]["domainName"]
+                    _auction_bid_notifications(_aid, _email, _name, _gross,
+                                               _prior_top, _bu)
+                except Exception as e:
+                    print(f"auction_bid: notifications failed: {e}")
             _back = raw_path + "?view=auction&id=" + urllib.parse.quote(_aid)
             if is_admin and qs.get("as"):
                 _back += "&as=" + urllib.parse.quote(qs["as"])
             if _bad_bid:
                 _back += "&err=bid"
+            return {"statusCode": 303, "headers": {"Location": _back}, "body": ""}
+
+        if action == "auction_alert":
+            _aid = (form.get("auction_id") or "").strip()
+            _as = (form.get("as") or qs.get("as") or "").strip()
+            _owner = _as if (is_admin and _as) else client_id
+            _rec = (_people_index().get("by_id", {}) or {}).get(str(_owner)) or {}
+            _email = (_rec.get("email") or "").strip().lower()
+            _name = (_rec.get("name") or _rec.get("first_name") or "").strip()
+            _on = (form.get("alerts") == "on")
+            if _aid and _email:
+                try:
+                    _set_auction_alert(_aid, _email, str(_owner), _name, _on)
+                except Exception as e:
+                    print(f"auction_alert: save failed: {e}")
+            _back = raw_path + "?view=auction&id=" + urllib.parse.quote(_aid)
+            if is_admin and qs.get("as"):
+                _back += "&as=" + urllib.parse.quote(qs["as"])
             return {"statusCode": 303, "headers": {"Location": _back}, "body": ""}
 
         if action == "auction_create":
