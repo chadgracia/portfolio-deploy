@@ -2359,12 +2359,16 @@ def render_auction_invites(auction_id, base_url):
         rec = idx.get(str(pid)) or {}
         nm = html.escape((rec.get("name") or rec.get("first_name") or "").strip())
         em = html.escape((rec.get("email") or "").strip())
-        link = f"{base_url}/?client={pid}&token={make_token(str(pid))}"
+        _aid = urllib.parse.quote(str(auction_id))
+        link = (f"{base_url}/?client={pid}&token={make_token(str(pid))}"
+                f"&view=auction&id={_aid}")
+        preview = f"{base_url}/?as={pid}&view=auction&id={_aid}"
         rows += ("<tr>"
                  f"<td>{nm}</td><td>{em}</td>"
                  f'<td><input class="inv-url" readonly value="{html.escape(link, quote=True)}"'
                  ' onclick="this.select()"></td>'
-                 f'<td><a href="{html.escape(link, quote=True)}" target="_blank">Open</a></td>'
+                 f'<td><a href="{html.escape(preview, quote=True)}" target="_blank">'
+                 'Preview</a></td>'
                  "</tr>")
     if not rows:
         rows = ('<tr><td colspan="4" class="wl-soft">No buyers found for this company '
