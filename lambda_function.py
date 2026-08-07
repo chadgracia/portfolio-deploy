@@ -2356,17 +2356,17 @@ def render_auction(auction_id, client_id, is_admin, err=""):
         return (f'<div class="au-stat"><div class="au-lbl">{label}</div>'
                 f'<div class="au-val">{value}</div></div>')
 
-    stats = (
-        stat("Ask", _wl_pps(auc.get("ask")) if auc.get("ask") else "&mdash;")
-        + stat("Size", (f'{_wl_money(auc.get("min_size"))} &ndash; '
-                        f'{_wl_money(auc.get("max_size"))}')
-               if auc.get("min_size") else "&mdash;")
-        + stat("Bids in", str(len(ranked)))
-        + stat("Top bid", _wl_pps(top) if top else "&mdash;")
-    )
+    stats = ""
+    if is_admin and auc.get("ask"):
+        stats += stat("Reserve", _wl_pps(auc.get("ask")))
+    stats += stat("Size", (f'{_wl_money(auc.get("min_size"))} &ndash; '
+                           f'{_wl_money(auc.get("max_size"))}')
+                  if auc.get("min_size") else "&mdash;")
+    stats += stat("Top bid", _wl_pps(top) if top else "&mdash;")
     _buyers = _wl_buyers(company) or int(auc.get("buyers") or 0)
     if _buyers:
         stats += stat("Buyers", f"{_buyers:,}")
+    stats += stat("Bids in", str(len(ranked)))
 
     facts = _auction_deal_facts(auc.get("deal_id"), company)
     _f = []
@@ -2374,17 +2374,32 @@ def render_auction(auction_id, client_id, is_admin, err=""):
         _f.append(("Share class", html.escape(facts["share_class"])))
     if facts["shares"]:
         _f.append(("Shares", f"{int(facts['shares']):,}"))
-    if facts["lr_pps"]:
-        _f.append(("Last round PPS", _wl_pps(facts["lr_pps"])))
-    if facts["lr_val"]:
-        _f.append(("Last round val", f"${facts['lr_val']:,.2f}B"))
+    _lr = []
     if facts["lr_series"]:
-        _f.append(("Series", html.escape(facts["lr_series"])))
+        _lr.append(("Series", html.escape(facts["lr_series"])))
+    if facts["lr_pps"]:
+        _lr.append(("Price per share", _wl_pps(facts["lr_pps"])))
+    if facts["lr_val"]:
+        _lr.append(("Valuation", f"${facts['lr_val']:,.2f}B"))
     if facts["lr_date"]:
-        _f.append(("Round date", html.escape(facts["lr_date"])))
-    facts_rows = "".join(
-        f'<div class="au-frow"><span class="au-flbl">{lbl}</span>'
-        f'<span class="au-fval">{val}</span></div>' for lbl, val in _f)
+        _lr.append(("Date", html.escape(facts["lr_date"])))
+    lr_html = ""
+    if _lr:
+        lr_html = ('<div class="au-lr"><div class="au-lrhead">Last round</div>'
+                   '<div class="au-lrgrid">'
+                   + "".join(f'<div><span class="au-lrlbl">{l}</span>'
+                             f'<span class="au-lrval">{v}</span></div>' for l, v in _lr)
+                   + "</div></div>")
+    _cells = ""
+    for _i in range(0, len(_f), 2):
+        _pair = _f[_i:_i + 2]
+        _cells += "<tr>"
+        for _lbl, _val in _pair:
+            _cells += f'<th class="au-th">{_lbl}</th><td class="au-td">{_val}</td>'
+        if len(_pair) == 1:
+            _cells += '<th class="au-th"></th><td class="au-td"></td>'
+        _cells += "</tr>"
+    facts_rows = f'<table class="au-ftable">{_cells}</table>' if _f else ""
     logo_html = (f'<img class="au-logo" src="{html.escape(facts["logo"], quote=True)}" '
                  f'alt="" onerror="this.style.display=\'none\'">'
                  if facts["logo"] else "")
@@ -2396,9 +2411,16 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     notes_html = (f'<div class="au-cat"><span class="au-flbl">Seller notes</span>'
                   f'<div>{html.escape(facts["notes"])}</div></div>'
                   if facts["notes"] else "")
-    details_html = (f'<div class="au-details">{logo_html}{desc_html}'
-                    f'<div class="au-facts">{facts_rows}</div>{cat_html}{notes_html}</div>'
-                    if (facts_rows or desc_html or cat_html or notes_html or logo_html) else "")
+    _did = str(auc.get("deal_id") or "")
+    id_html = (f'<div class="au-did">Deal ID: {html.escape(_did)}'
+               f'<button type="button" class="au-copy" onclick="auCopy(\'{html.escape(_did, quote=True)}\')"'
+               f' title="Copy">&#10697;</button></div>') if _did else ""
+    header_html = (f'<div class="au-head">{logo_html}'
+                   f'<div class="au-headtext"><h1>{html.escape(company)}'
+                   f'{(" &mdash; " + html.escape(auc.get("structure"))) if auc.get("structure") else ""}</h1>'
+                   f'{desc_html}{id_html}</div></div>')
+    details_html = (f'<div class="au-details">{facts_rows}{cat_html}{notes_html}{lr_html}</div>'
+                    if (facts_rows or cat_html or notes_html or lr_html) else "")
 
     side_panel = ""
     if is_admin:
@@ -2453,13 +2475,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                             f'{_wl_pps(me.get("gross"))}, ranked {my_rank} of {len(ranked)}. '
                             f'The top bid is {_wl_pps(top)}.</p>')
         elif ranked:
-            if len(ranked) == 1:
-                standing = (f'<p class="wl-soft">One bid received, at {_wl_pps(top)} '
-                            f'per share. You have not bid yet.</p>')
-            else:
-                standing = (f'<p class="wl-soft">{len(ranked)} bids received, ranging from '
-                            f'{_wl_pps(low)} to {_wl_pps(top)} per share. '
-                            f'You have not bid yet.</p>')
+            standing = ""
         else:
             standing = '<p class="wl-soft">No bids have been placed yet. Be the first.</p>'
 
@@ -2634,15 +2650,37 @@ def render_auction(auction_id, client_id, is_admin, err=""):
       }}
       .au-details {{ border:1px solid var(--line); border-radius:8px; padding:16px 18px;
                      margin:0 0 18px; }}
-      .au-logo {{ max-height:38px; max-width:170px; margin-bottom:10px; display:block; }}
-      .au-desc {{ margin:0 0 12px; color:#4b5563; font-size:14px; }}
-      .au-facts {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
-                   gap:10px 18px; }}
-      .au-frow {{ display:flex; flex-direction:column; }}
-      .au-flbl {{ font-size:11px; letter-spacing:.06em; text-transform:uppercase;
-                  color:#6b7280; }}
-      .au-fval {{ font-size:15px; font-weight:600; }}
-      .au-cat {{ margin-top:12px; font-size:14px; }}
+      .au-logo {{ max-width:110px; max-height:70px; object-fit:contain; order:2;
+                  flex:0 0 auto; }}
+      .au-desc {{ margin:0 0 16px; color:#6b7280; font-style:italic; font-size:15px;
+                  line-height:1.55; }}
+      .au-ftable {{ width:100%; border-collapse:collapse; clear:both; }}
+      .au-ftable tr {{ border-bottom:1px solid var(--line); }}
+      .au-ftable tr:last-child {{ border-bottom:none; }}
+      .au-th {{ width:16%; text-align:left; vertical-align:middle; padding:13px 10px 13px 0;
+                font-size:11px; letter-spacing:.05em; text-transform:uppercase;
+                color:#6b7280; font-weight:600; }}
+      .au-td {{ width:34%; text-align:left; vertical-align:middle; padding:13px 24px 13px 0;
+                font-size:15px; }}
+      .au-cat {{ margin-top:16px; font-size:15px; }}
+      .au-head {{ display:flex; gap:20px; align-items:flex-start; margin-bottom:18px; }}
+      .au-headtext {{ flex:1; min-width:0; }}
+      .au-headtext h1 {{ margin:0 0 6px; }}
+      .au-did {{ font-size:13px; color:#6b7280; margin-top:8px; }}
+      .au-copy {{ border:none; background:none; cursor:pointer; color:#6b7280;
+                  font-size:14px; padding:0 4px; }}
+      .au-lr {{ background:#f4f1ea; border-left:3px solid var(--ink); border-radius:4px;
+                padding:12px 16px; margin-top:18px; }}
+      .au-lrhead {{ font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+                    color:#6b7280; font-weight:600; margin-bottom:8px; }}
+      .au-lrgrid {{ display:flex; flex-wrap:wrap; gap:8px 28px; }}
+      .au-lrgrid > div {{ display:flex; flex-direction:column; }}
+      .au-lrlbl {{ font-size:11px; color:#6b7280; }}
+      .au-lrval {{ font-size:15px; font-weight:600; }}
+      .au-cols .au-stats {{ flex-direction:column; gap:12px; margin:0 0 16px; }}
+      .au-box {{ margin-top:0; }}
+      .au-cols .au-side .au-box {{ background:#faf8f3; border:1px solid var(--line);
+                                   font-size:13px; }}
       .au-implied {{ color:#1f7a4d; font-size:13px; margin-bottom:8px; }}
       .au-iqf {{ background:#fdf6e7; border:1px solid #f0dfae; border-radius:6px;
                  padding:11px 14px; margin:14px 0 0; font-size:14px; }}
@@ -2653,13 +2691,18 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                                     text-align:left; }}
       table.auc th {{ font-size:12px; letter-spacing:.06em; text-transform:uppercase; }}
     </style>
-    <h1>{html.escape(company)}{(" &mdash; " + html.escape(auc.get("structure"))) if auc.get("structure") else ""}</h1>
+    {header_html}
     {note}
-    <div class="au-stats">{stats}</div>
     <div class="{'au-cols' if side_panel else ''}">
       <div class="au-main">{details_html}{book}</div>
-      {f'<div class="au-side">{side_panel}</div>' if side_panel else ''}
+      {f'<div class="au-side"><div class="au-stats">{stats}</div>{side_panel}</div>'
+       if side_panel else f'<div class="au-stats">{stats}</div>'}
     </div>
+    <script>
+      function auCopy(t) {{
+        navigator.clipboard.writeText(t);
+      }}
+    </script>
     """, eyebrow=("Auction: " + company +
                   ((" — " + auc.get("structure")) if auc.get("structure") else "")))
 
