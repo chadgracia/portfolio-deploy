@@ -2163,7 +2163,9 @@ def render_auctions_admin(msg=""):
             f'{_wl_money(a.get("max_size")) if a.get("max_size") else "&mdash;"}</td>'
             f'<td>{f"{int(a.get(chr(115)+chr(104)+chr(97)+chr(114)+chr(101)+chr(115))):,}" if a.get("shares") else "&mdash;"}</td>'
             f'<td>{html.escape(a.get("status") or "open")}</td>'
-            f'<td><a href="?view=auction&amp;id={html.escape(aid, quote=True)}">View &rarr;</a></td>'
+            f'<td><a href="?view=auction&amp;id={html.escape(aid, quote=True)}">View</a>'
+            f' &middot; <a href="?view=invites&amp;id={html.escape(aid, quote=True)}">'
+            f'Invite buyers</a></td>'
             "</tr>"
         )
     if not rows:
