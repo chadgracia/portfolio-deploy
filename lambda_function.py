@@ -2625,11 +2625,11 @@ def render_auction(auction_id, client_id, is_admin, err=""):
 
     note = (f'<p class="au-note">{html.escape(auc.get("note") or "")}</p>'
             if auc.get("note") else "")
+    stats_block = f'<div class="au-stats">{stats}</div>' if stats.strip() else ""
     if auc.get("close_date"):
         note = (f'<p class="au-deadline">Bids close {html.escape(auc["close_date"])}.</p>'
                 + note)
 
-    stats_html = f'<div class="au-stats">{stats}</div>' if stats else ""
     return html_response(f"""
     <style>
       .au-stats {{ display:flex; flex-wrap:wrap; gap:26px; margin:16px 0 20px;
@@ -2723,7 +2723,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     {note}
     <div class="{'au-cols' if side_panel else ''}">
       <div class="au-main">{details_html}{book}</div>
-      {f'<div class="au-side">{stats_html}{side_panel}</div>' if side_panel else stats_html}
+      {f'<div class="au-side">{stats_block}{side_panel}</div>' if side_panel else stats_block}
     </div>
     <script>
       function auCopy(t) {{
