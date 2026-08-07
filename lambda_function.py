@@ -2666,6 +2666,8 @@ def render_auction(auction_id, client_id, is_admin, err=""):
             <input type="hidden" name="action" value="auction_bid">
             <input type="hidden" name="auction_id" value="{html.escape(str(auction_id), quote=True)}">
             <input type="hidden" name="as" value="{html.escape(str(client_id), quote=True)}">
+            <button type="submit" tabindex="-1" aria-hidden="true"
+                    style="position:absolute;left:-9999px;width:1px;height:1px;padding:0;border:0;"></button>
             <div class="au-grid">
               <div class="au-full"><label>Your bid ($/share)</label>
                 <input id="au-price" class="au-price" name="gross" type="text"
