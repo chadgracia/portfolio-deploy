@@ -2400,6 +2400,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                     f'<div class="au-facts">{facts_rows}</div>{cat_html}{notes_html}</div>'
                     if (facts_rows or desc_html or cat_html or notes_html or logo_html) else "")
 
+    side_panel = ""
     if is_admin:
         rows = ""
         demand = 0.0
@@ -2484,6 +2485,8 @@ def render_auction(auction_id, client_id, is_admin, err=""):
         book = f"""
         {standing}
         {iqf_html}
+        """
+        side_panel = f"""
         <div class="au-box">
           <h2 class="wl-h2">{'Update your bid' if me else 'Place a bid'}</h2>
           {_err_html}
@@ -2619,6 +2622,16 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                  border:none; border-radius:6px; background:var(--ink); color:#fff;
                  cursor:pointer; }}
       .au-price {{ font-size:22px !important; font-weight:600; padding:12px 14px !important; }}
+      .au-cols {{ display:flex; gap:22px; align-items:flex-start; }}
+      .au-cols .au-main {{ flex:1 1 auto; min-width:0; }}
+      .au-cols .au-side {{ flex:0 0 380px; position:sticky; top:18px; }}
+      .au-cols .au-box {{ margin-top:0; }}
+      .au-cols .au-grid {{ grid-template-columns:1fr 1fr; }}
+      .au-cols .au-grid .au-full {{ grid-column:1 / -1; }}
+      @media (max-width: 900px) {{
+        .au-cols {{ display:block; }}
+        .au-cols .au-side {{ position:static; margin-top:18px; }}
+      }}
       .au-details {{ border:1px solid var(--line); border-radius:8px; padding:16px 18px;
                      margin:0 0 18px; }}
       .au-logo {{ max-height:38px; max-width:170px; margin-bottom:10px; display:block; }}
@@ -2643,8 +2656,10 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     <h1>{html.escape(company)}{(" &mdash; " + html.escape(auc.get("structure"))) if auc.get("structure") else ""}</h1>
     {note}
     <div class="au-stats">{stats}</div>
-    {details_html}
-    {book}
+    <div class="{'au-cols' if side_panel else ''}">
+      <div class="au-main">{details_html}{book}</div>
+      {f'<div class="au-side">{side_panel}</div>' if side_panel else ''}
+    </div>
     """, eyebrow=("Auction: " + company +
                   ((" — " + auc.get("structure")) if auc.get("structure") else "")))
 
