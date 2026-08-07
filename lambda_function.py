@@ -2339,6 +2339,54 @@ def _auction_deal_facts(deal_id, company_name):
     return out
 
 
+def render_auction_invites(auction_id, base_url):
+    """Admin-only: name, email and magic link for every buyer of this company."""
+    auc = (_load_auctions() or {}).get(str(auction_id))
+    if not auc:
+        return html_response("<h1>Auction not found</h1>")
+    company = auc.get("company") or ""
+    try:
+        obj = boto3.client("s3").get_object(Bucket=COMPANIES_BUCKET,
+                                            Key="interest_people.json")
+        pids = (json.loads(obj["Body"].read()).get("buy") or {}).get(company) or []
+    except Exception as e:
+        print(f"invites: could not load interest_people.json: {e}")
+        pids = []
+
+    idx = (_people_index().get("by_id", {}) or {})
+    rows = ""
+    for pid in pids:
+        rec = idx.get(str(pid)) or {}
+        nm = html.escape((rec.get("name") or rec.get("first_name") or "").strip())
+        em = html.escape((rec.get("email") or "").strip())
+        link = f"{base_url}/?client={pid}&token={make_token(str(pid))}"
+        rows += ("<tr>"
+                 f"<td>{nm}</td><td>{em}</td>"
+                 f'<td><input class="inv-url" readonly value="{html.escape(link, quote=True)}"'
+                 ' onclick="this.select()"></td>'
+                 f'<td><a href="{html.escape(link, quote=True)}" target="_blank">Open</a></td>'
+                 "</tr>")
+    if not rows:
+        rows = ('<tr><td colspan="4" class="wl-soft">No buyers found for this company '
+                'in interest_people.json.</td></tr>')
+    return html_response(f"""
+    <style>
+      table.inv {{ width:100%; border-collapse:collapse; font-size:14px; }}
+      table.inv th, table.inv td {{ border:1px solid #ddd; padding:9px 11px;
+                                    text-align:left; vertical-align:middle; }}
+      table.inv th {{ font-size:12px; letter-spacing:.06em; text-transform:uppercase; }}
+      .inv-url {{ width:100%; font-family:ui-monospace,monospace; font-size:11px;
+                  border:none; background:none; }}
+      .wl-soft {{ color:#6b7280; }}
+    </style>
+    <h1>Invite buyers &mdash; {html.escape(company)}</h1>
+    <p class="sub">{len(pids)} buyer{'' if len(pids) == 1 else 's'} carry this company in
+    Buy Interest. Each link signs that person in; do not forward them.</p>
+    <table class="inv"><thead><tr><th>Name</th><th>Email</th><th>Link</th><th></th></tr></thead>
+      <tbody>{rows}</tbody></table>
+    """, eyebrow="Invite buyers")
+
+
 def render_auction(auction_id, client_id, is_admin, err=""):
     auc = (_load_auctions() or {}).get(str(auction_id))
     if not auc:
@@ -3118,6 +3166,9 @@ def lambda_handler(event, context):
         return {"statusCode": 303, "headers": {"Location": raw_path}, "body": ""}
 
     view_id = qs["as"] if (is_admin and qs.get("as")) else client_id
+    if qs.get("view") == "invites" and qs.get("id") and is_admin:
+        return render_auction_invites(qs["id"],
+                                      "https://" + event["requestContext"]["domainName"])
     if qs.get("view") == "auction" and qs.get("id"):
         return render_auction(qs["id"], view_id, is_admin and not qs.get("as"),
                               qs.get("err") or "")
