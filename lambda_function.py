@@ -2650,13 +2650,9 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                         if _alert_on else
                         '&#128276; Alert me when the top bid changes')
         _alert_html = (
-            f'<form method="POST" action="?view=auction&amp;id={html.escape(str(auction_id), quote=True)}" class="au-alertform">'
-            '<input type="hidden" name="action" value="auction_alert">'
-            f'<input type="hidden" name="auction_id" value="{html.escape(str(auction_id), quote=True)}">'
-            f'<input type="hidden" name="as" value="{html.escape(str(client_id), quote=True)}">'
-            f'<input type="hidden" name="alerts" value="{"off" if _alert_on else "on"}">'
-            f'<button class="au-alert" type="submit">{_alert_label}</button>'
-            '</form>')
+            f'<button class="au-alert" type="submit" name="toggle_alerts" '
+            f'value="{"off" if _alert_on else "on"}" formnovalidate>'
+            f'{_alert_label}</button>')
         book = f"""
         {standing}
         {iqf_html}
@@ -2692,6 +2688,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
               <div class="au-full">
                 <div id="au-implied" class="au-implied" style="display:none;"></div>
                 <div id="au-warn" class="au-bad" style="display:none;"></div>
+                {_alert_html}
                 <button class="au-beat" type="button" onclick="auBeat()"
                         style="{'' if (top and (not me or (_auc_num(me.get('gross')) or 0) < top)) else 'display:none;'}">
                   Beat the top bid
@@ -2700,7 +2697,6 @@ def render_auction(auction_id, client_id, is_admin, err=""):
               </div>
             </div>
           </form>
-          {_alert_html}
         </div>
         <script>
           (function () {{
@@ -2784,8 +2780,8 @@ def render_auction(auction_id, client_id, is_admin, err=""):
       .au-bad {{ color:#b45309; font-weight:600; }}
       .au-lead {{ color:#1f7a4d; font-weight:600; }}
       .au-deadline {{ font-weight:600; margin:0 0 6px; }}
-      .au-alertform {{ margin-top:12px; }}
-      .au-alert {{ width:100%; padding:9px 12px; font-family:inherit; font-size:13px;
+      .au-alert {{ width:100%; margin:2px 0 12px; padding:9px 12px;
+                   font-family:inherit; font-size:13px;
                    font-weight:600; background:#f8f9fa; color:#374151;
                    border:1px solid #d1d5db; border-radius:6px; cursor:pointer; }}
       .au-alert:hover {{ background:#eef1f4; }}
@@ -3163,6 +3159,17 @@ def lambda_handler(event, context):
             _rec = (_people_index().get("by_id", {}) or {}).get(str(_owner)) or {}
             _email = (_rec.get("email") or "").strip().lower()
             _name = (_rec.get("name") or _rec.get("first_name") or "").strip()
+            if form.get("toggle_alerts"):
+                if _aid and _email:
+                    try:
+                        _set_auction_alert(_aid, _email, str(_owner), _name,
+                                           form.get("toggle_alerts") == "on")
+                    except Exception as e:
+                        print(f"auction_alert: save failed: {e}")
+                _back = raw_path + "?view=auction&id=" + urllib.parse.quote(_aid)
+                if is_admin and qs.get("as"):
+                    _back += "&as=" + urllib.parse.quote(qs["as"])
+                return {"statusCode": 303, "headers": {"Location": _back}, "body": ""}
             # A bid must parse to a positive number, or the book would carry a null
             # that sorts to the bottom and renders as a dash. Reject rather than store.
             _gross = _auc_num(form.get("gross"))
