@@ -2646,13 +2646,14 @@ def render_auction(auction_id, client_id, is_admin, err=""):
             _alert_on = bool(my_email) and my_email in (_load_auction_alerts(auction_id) or {})
         except Exception:
             _alert_on = False
-        _alert_label = ('&#128276; Alerts on &mdash; email me when the top bid changes. Turn off'
-                        if _alert_on else
-                        '&#128276; Alert me when the top bid changes')
         _alert_html = (
-            f'<button class="au-alert" type="submit" name="toggle_alerts" '
-            f'value="{"off" if _alert_on else "on"}" formnovalidate>'
-            f'{_alert_label}</button>')
+            '<div class="au-alertrow">'
+            '<label class="au-switch">'
+            f'<input type="checkbox" id="au-alertbox"{" checked" if _alert_on else ""}>'
+            '<span class="au-slider"></span></label>'
+            '<span class="au-alerttxt" id="au-alerttxt">'
+            f'{"Alerts on &mdash; email me when the top bid changes" if _alert_on else "Alert me when the top bid changes"}'
+            '</span></div>')
         book = f"""
         {standing}
         {iqf_html}
@@ -2666,8 +2667,6 @@ def render_auction(auction_id, client_id, is_admin, err=""):
             <input type="hidden" name="action" value="auction_bid">
             <input type="hidden" name="auction_id" value="{html.escape(str(auction_id), quote=True)}">
             <input type="hidden" name="as" value="{html.escape(str(client_id), quote=True)}">
-            <button type="submit" tabindex="-1" aria-hidden="true"
-                    style="position:absolute;left:-9999px;width:1px;height:1px;padding:0;border:0;"></button>
             <div class="au-grid">
               <div class="au-full"><label>Your bid ($/share)</label>
                 <input id="au-price" class="au-price" name="gross" type="text"
@@ -2756,6 +2755,23 @@ def render_auction(auction_id, client_id, is_admin, err=""):
             }}
             el.addEventListener('input', check);
             check();
+            var ab = document.getElementById('au-alertbox');
+            if (ab) {{
+              ab.addEventListener('change', function () {{
+                var on = ab.checked;
+                var txt = document.getElementById('au-alerttxt');
+                if (txt) {{ txt.textContent = on
+                  ? 'Alerts on — email me when the top bid changes'
+                  : 'Alert me when the top bid changes'; }}
+                fetch('?view=auction&id={html.escape(str(auction_id), quote=True)}', {{
+                  method: 'POST',
+                  headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+                  body: 'action=auction_alert&auction_id={urllib.parse.quote(str(auction_id))}'
+                        + '&as={urllib.parse.quote(str(client_id))}'
+                        + '&alerts=' + (on ? 'on' : 'off')
+                }}).catch(function () {{ ab.checked = !on; }});
+              }});
+            }}
             window.auBeat = function () {{
               if (TOP > 0) {{ el.value = (TOP + 1).toFixed(2); check(); el.focus(); }}
             }};
@@ -2782,11 +2798,17 @@ def render_auction(auction_id, client_id, is_admin, err=""):
       .au-bad {{ color:#b45309; font-weight:600; }}
       .au-lead {{ color:#1f7a4d; font-weight:600; }}
       .au-deadline {{ font-weight:600; margin:0 0 6px; }}
-      .au-alert {{ width:100%; margin:2px 0 12px; padding:9px 12px;
-                   font-family:inherit; font-size:13px;
-                   font-weight:600; background:#f8f9fa; color:#374151;
-                   border:1px solid #d1d5db; border-radius:6px; cursor:pointer; }}
-      .au-alert:hover {{ background:#eef1f4; }}
+      .au-alertrow {{ display:flex; align-items:center; gap:10px; margin:2px 0 12px; }}
+      .au-switch {{ position:relative; display:inline-block; width:40px; height:22px; flex:none; }}
+      .au-switch input {{ opacity:0; width:0; height:0; }}
+      .au-slider {{ position:absolute; inset:0; background:#d1d5db; border-radius:11px;
+                    transition:background .15s; cursor:pointer; }}
+      .au-slider:before {{ content:""; position:absolute; height:18px; width:18px;
+                           left:2px; top:2px; background:#fff; border-radius:50%;
+                           transition:transform .15s; }}
+      .au-switch input:checked + .au-slider {{ background:#1f7a4d; }}
+      .au-switch input:checked + .au-slider:before {{ transform:translateX(18px); }}
+      .au-alerttxt {{ font-size:13px; font-weight:600; color:#374151; }}
       .au-beat {{ margin-right:10px; padding:10px 18px; font-family:inherit;
                   font-size:14px; font-weight:600; border:1px solid var(--ink);
                   border-radius:6px; background:#fff; color:var(--ink); cursor:pointer; }}
