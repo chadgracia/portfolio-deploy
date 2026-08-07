@@ -2,6 +2,12 @@ name: Deploy
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+# One deploy at a time. A newer push supersedes any older run still queued or
+# running, so a job stuck waiting on a runner can never land on top of newer code.
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
 permissions:
   id-token: write
   contents: read
