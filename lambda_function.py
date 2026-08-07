@@ -2975,8 +2975,14 @@ def lambda_handler(event, context):
         if verify_token(qs["client"], qs["token"]):
             cookie = (f"{COOKIE_NAME}={make_session(qs['client'])}; Path=/; HttpOnly; "
                       f"Secure; SameSite=Lax; Max-Age={SESSION_DAYS * 86400}")
+            _dest = raw_path
+            _v = (qs.get("view") or "").strip()
+            if _v in ("auction", "watchlist", "holdings"):
+                _dest = raw_path + "?view=" + urllib.parse.quote(_v)
+                if qs.get("id"):
+                    _dest += "&id=" + urllib.parse.quote(qs["id"])
             return {"statusCode": 303,
-                    "headers": {"Location": raw_path, "Set-Cookie": cookie}, "body": ""}
+                    "headers": {"Location": _dest, "Set-Cookie": cookie}, "body": ""}
         return html_response(login_required("That link isn't valid."), 403)
 
     # 1b) Cross-site SSO handoff from the trading site: verify the signed email,
