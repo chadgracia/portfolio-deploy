@@ -2285,6 +2285,17 @@ AUC_CLASS_LABELS = {5077831: "Common", 5077834: "Preferred",
                     5077912: "Mixed", 5077915: "Any"}
 
 
+def _auc_date(raw):
+    """2026/07/28 or 2026-07-28 -> July 28, 2026. Returns the input on failure."""
+    s = (raw or "").strip().replace("/", "-")
+    for fmt in ("%Y-%m-%d", "%m-%d-%Y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%B %-d, %Y")
+        except ValueError:
+            continue
+    return raw or ""
+
+
 def _auction_deal_facts(deal_id, company_name):
     """Key data points for the seeded deal plus its company. Never raises."""
     out = {"logo": "", "description": "", "catalyst": "", "share_class": "",
@@ -2359,30 +2370,36 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     stats = ""
     if is_admin and auc.get("ask"):
         stats += stat("Reserve", _wl_pps(auc.get("ask")))
-    stats += stat("Size", (f'{_wl_money(auc.get("min_size"))} &ndash; '
-                           f'{_wl_money(auc.get("max_size"))}')
-                  if auc.get("min_size") else "&mdash;")
-    stats += stat("Top bid", _wl_pps(top) if top else "&mdash;")
     _buyers = _wl_buyers(company) or int(auc.get("buyers") or 0)
+    bid_stats = ""
+    if top:
+        bid_stats += (f'<div class="au-bstat"><span class="au-lrlbl">Top bid</span>'
+                      f'<span class="au-bval">{_wl_pps(top)}</span></div>')
     if _buyers:
-        stats += stat("Buyers", f"{_buyers:,}")
-    stats += stat("Bids in", str(len(ranked)))
+        bid_stats += (f'<div class="au-bstat"><span class="au-lrlbl">Buyers</span>'
+                      f'<span class="au-bval">{_buyers:,}</span></div>')
+    bid_stats = f'<div class="au-bstats">{bid_stats}</div>' if bid_stats else ""
 
     facts = _auction_deal_facts(auc.get("deal_id"), company)
     _f = []
+    if auc.get("structure"):
+        _f.append(("Structure", html.escape(auc["structure"])))
     if facts["share_class"]:
         _f.append(("Share class", html.escape(facts["share_class"])))
+    if auc.get("min_size"):
+        _f.append(("Size", f'{_wl_money(auc.get("min_size"))} &ndash; '
+                           f'{_wl_money(auc.get("max_size"))}'))
     if facts["shares"]:
         _f.append(("Shares", f"{int(facts['shares']):,}"))
     _lr = []
+    if facts["lr_date"]:
+        _lr.append(("Date", html.escape(_auc_date(facts["lr_date"]))))
     if facts["lr_series"]:
         _lr.append(("Series", html.escape(facts["lr_series"])))
     if facts["lr_pps"]:
         _lr.append(("Price per share", _wl_pps(facts["lr_pps"])))
     if facts["lr_val"]:
         _lr.append(("Valuation", f"${facts['lr_val']:,.2f}B"))
-    if facts["lr_date"]:
-        _lr.append(("Date", html.escape(facts["lr_date"])))
     lr_html = ""
     if _lr:
         lr_html = ('<div class="au-lr"><div class="au-lrhead">Last round</div>'
@@ -2419,7 +2436,8 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                    f'<div class="au-headtext"><h1>{html.escape(company)}'
                    f'{(" &mdash; " + html.escape(auc.get("structure"))) if auc.get("structure") else ""}</h1>'
                    f'{desc_html}{id_html}</div></div>')
-    details_html = (f'<div class="au-details">{facts_rows}{cat_html}{notes_html}{lr_html}</div>'
+    details_html = (f'<div class="au-details"><div class="au-boxhead">Deal details</div>'
+                    f'{facts_rows}{cat_html}{notes_html}{lr_html}</div>'
                     if (facts_rows or cat_html or notes_html or lr_html) else "")
 
     side_panel = ""
@@ -2504,7 +2522,8 @@ def render_auction(auction_id, client_id, is_admin, err=""):
         """
         side_panel = f"""
         <div class="au-box">
-          <h2 class="wl-h2">{'Update your bid' if me else 'Place a bid'}</h2>
+          <div class="au-boxhead">{'Your bid' if me else 'Place a bid'}</div>
+          {bid_stats}
           {_err_html}
           <form method="POST" action="?view=auction&amp;id={html.escape(str(auction_id), quote=True)}">
             <input type="hidden" name="action" value="auction_bid">
@@ -2675,6 +2694,12 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                     color:#6b7280; font-weight:600; margin-bottom:8px; }}
       .au-lrgrid {{ display:flex; flex-wrap:wrap; gap:8px 28px; }}
       .au-lrgrid > div {{ display:flex; flex-direction:column; }}
+      .au-boxhead {{ font-size:11px; letter-spacing:.07em; text-transform:uppercase;
+                     color:#6b7280; font-weight:600; margin-bottom:12px; }}
+      .au-bstats {{ display:flex; gap:26px; padding-bottom:14px; margin-bottom:14px;
+                    border-bottom:1px solid var(--line); }}
+      .au-bstat {{ display:flex; flex-direction:column; }}
+      .au-bval {{ font-size:19px; font-weight:600; }}
       .au-lrlbl {{ font-size:11px; color:#6b7280; }}
       .au-lrval {{ font-size:15px; font-weight:600; }}
       .au-cols .au-stats {{ flex-direction:column; gap:12px; margin:0 0 16px; }}
