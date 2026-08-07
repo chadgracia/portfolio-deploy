@@ -2422,10 +2422,10 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                  if facts["logo"] else "")
     desc_html = (f'<p class="au-desc">{html.escape(facts["description"])}</p>'
                  if facts["description"] else "")
-    cat_html = (f'<div class="au-cat"><span class="au-flbl">Recent development</span>'
+    cat_html = (f'<div class="au-cat"><div class="au-catlbl">Recent development</div>'
                 f'<div>{html.escape(facts["catalyst"])}</div></div>'
                 if facts["catalyst"] else "")
-    notes_html = (f'<div class="au-cat"><span class="au-flbl">Seller notes</span>'
+    notes_html = (f'<div class="au-cat"><div class="au-catlbl">Seller notes</div>'
                   f'<div>{html.escape(facts["notes"])}</div></div>'
                   if facts["notes"] else "")
     _did = str(auc.get("deal_id") or "")
@@ -2629,6 +2629,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
         note = (f'<p class="au-deadline">Bids close {html.escape(auc["close_date"])}.</p>'
                 + note)
 
+    stats_html = f'<div class="au-stats">{stats}</div>' if stats else ""
     return html_response(f"""
     <style>
       .au-stats {{ display:flex; flex-wrap:wrap; gap:26px; margin:16px 0 20px;
@@ -2676,12 +2677,14 @@ def render_auction(auction_id, client_id, is_admin, err=""):
       .au-ftable {{ width:100%; border-collapse:collapse; clear:both; }}
       .au-ftable tr {{ border-bottom:1px solid var(--line); }}
       .au-ftable tr:last-child {{ border-bottom:none; }}
-      .au-th {{ width:16%; text-align:left; vertical-align:middle; padding:13px 10px 13px 0;
+      .au-th {{ width:22%; text-align:left; vertical-align:middle; padding:12px 12px 12px 0;
                 font-size:11px; letter-spacing:.05em; text-transform:uppercase;
-                color:#6b7280; font-weight:600; }}
-      .au-td {{ width:34%; text-align:left; vertical-align:middle; padding:13px 24px 13px 0;
-                font-size:15px; }}
+                color:#6b7280; font-weight:600; white-space:nowrap; }}
+      .au-td {{ width:28%; text-align:left; vertical-align:middle; padding:12px 28px 12px 0;
+                font-size:15px; font-weight:500; }}
       .au-cat {{ margin-top:16px; font-size:15px; }}
+      .au-catlbl {{ font-size:11px; letter-spacing:.05em; text-transform:uppercase;
+                    color:#6b7280; font-weight:600; margin-bottom:4px; }}
       .au-head {{ display:flex; gap:20px; align-items:flex-start; margin-bottom:18px; }}
       .au-headtext {{ flex:1; min-width:0; }}
       .au-headtext h1 {{ margin:0 0 6px; }}
@@ -2720,8 +2723,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     {note}
     <div class="{'au-cols' if side_panel else ''}">
       <div class="au-main">{details_html}{book}</div>
-      {f'<div class="au-side"><div class="au-stats">{stats}</div>{side_panel}</div>'
-       if side_panel else f'<div class="au-stats">{stats}</div>'}
+      {f'<div class="au-side">{stats_html}{side_panel}</div>' if side_panel else stats_html}
     </div>
     <script>
       function auCopy(t) {{
