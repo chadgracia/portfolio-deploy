@@ -2783,7 +2783,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
             if auc.get("note") else "")
     stats_block = f'<div class="au-stats">{stats}</div>' if stats.strip() else ""
     if auc.get("close_date"):
-        note = (f'<p class="au-deadline">Bids close {html.escape(auc["close_date"])}.</p>'
+        note = (f'<p class="au-deadline">Bids close {html.escape(_auc_date(auc["close_date"]))}.</p>'
                 + note)
 
     return html_response(f"""
