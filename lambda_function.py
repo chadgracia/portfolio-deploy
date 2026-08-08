@@ -1604,6 +1604,14 @@ TOPNAV_HTML = """
       </div>
     </nav>"""
 
+# Same nav with one extra button into the internal tools index. Derived from
+# TOPNAV_HTML so the shared links only ever have to be edited in one place; only
+# pages that pass is_admin=True to html_response render this variant.
+TOPNAV_ADMIN_HTML = TOPNAV_HTML.replace(
+    '<a class="navbtn" href="https://trades.graciagroup.com/">Indications</a>',
+    '<a class="navbtn" href="https://trades.graciagroup.com/">Indications</a>\n'
+    '        <a class="navbtn" href="?view=admin">Admin</a>')
+
 # Firm legal disclosure, pinned to the very bottom of every page.
 DISCLOSURE_HTML = """
     <footer class="legal">
@@ -1619,7 +1627,12 @@ DISCLOSURE_HTML = """
     </footer>"""
 
 
-def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist"):
+def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist",
+                  is_admin=False):
+    # Every page shares this shell, so the only thing is_admin changes is which nav
+    # constant gets injected. It defaults to False: any caller that doesn't opt in
+    # keeps the client-facing nav exactly as before.
+    topnav = TOPNAV_ADMIN_HTML if is_admin else TOPNAV_HTML
     return {
         "statusCode": status,
         "headers": {"Content-Type": "text/html; charset=utf-8"},
@@ -1837,7 +1850,7 @@ def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist"
 </head>
 <body>
   <div class="card">
-    {TOPNAV_HTML}
+    {topnav}
     <div class="logo">{html.escape(eyebrow)}</div>
     {body_html}
     {DISCLOSURE_HTML}
@@ -2119,7 +2132,7 @@ def render_client_link(base_url):
         document.execCommand('copy');
       }}
     </script>
-    """)
+    """, is_admin=True)
 
 
 AUCTIONS_KEY = "auctions.json"
@@ -2149,6 +2162,51 @@ def _auc_num(v):
         return float(s) if s else None
     except (TypeError, ValueError):
         return None
+
+
+ADMIN_BRIEF_URL = "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?key=alkj%2A707q235-qjdf"
+ADMIN_MAILER_URL = ADMIN_BRIEF_URL + "&view=mailer"
+ADMIN_PRICING_URL = "https://jw2kk4a73jbft32yf5lr7u22bm0bgkiy.lambda-url.us-east-1.on.aws/"
+ADMIN_TRADES_URL = "https://trades.graciagroup.com/"
+
+
+def render_admin_hub():
+    """Admin-only index of every internal tool."""
+    tiles = [
+        ("Daily brief", "Your queue: invoices, closes, crossed trades, warm leads.",
+         ADMIN_BRIEF_URL, True),
+        ("Weekly mailer recipients", "First name and email for the SharePoint flow.",
+         ADMIN_MAILER_URL, True),
+        ("Third-party pricing", "Update Hiive bid, ask and mark for tracked names.",
+         ADMIN_PRICING_URL, True),
+        ("Auctions", "Create an auction, view the order book, invite buyers.",
+         "?view=auctions", False),
+        ("Client links", "Generate a sign-in link for any client, or preview their view.",
+         "?view=link", False),
+        ("Trades book", "The full indications grid, with nudges and LOI requests.",
+         ADMIN_TRADES_URL, True),
+    ]
+    cards = ""
+    for title, desc, href, external in tiles:
+        tgt = ' target="_blank"' if external else ""
+        cards += (f'<a class="hub-card" href="{html.escape(href, quote=True)}"{tgt}>'
+                  f'<div class="hub-title">{html.escape(title)}</div>'
+                  f'<div class="hub-desc">{html.escape(desc)}</div></a>')
+    return html_response(f"""
+    <style>
+      .hub-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
+                   gap:14px; margin-top:18px; }}
+      .hub-card {{ display:block; border:1px solid var(--line); border-radius:8px;
+                   padding:16px 18px; text-decoration:none; color:inherit;
+                   background:#fff; transition:border-color .15s, background .15s; }}
+      .hub-card:hover {{ border-color:var(--ink); background:#faf8f3; }}
+      .hub-title {{ font-weight:600; font-size:16px; margin-bottom:5px; }}
+      .hub-desc {{ font-size:13px; color:#6b7280; line-height:1.45; }}
+    </style>
+    <h1>Admin</h1>
+    <p class="sub">Internal tools. Nothing here is visible to clients.</p>
+    <div class="hub-grid">{cards}</div>
+    """, eyebrow="Admin", is_admin=True)
 
 
 def render_auctions_admin(msg=""):
@@ -2212,7 +2270,7 @@ def render_auctions_admin(msg=""):
     <table class="auc"><thead><tr><th>Company</th><th>Ask</th><th>Size</th>
       <th>Shares</th><th>Status</th><th></th></tr></thead>
       <tbody>{rows}</tbody></table>
-    """)
+    """, is_admin=True)
 
 
 def _auction_bids_key(auction_id):
@@ -2462,7 +2520,7 @@ def render_auction_invites(auction_id, base_url):
     Buy Interest. Each link signs that person in; do not forward them.</p>
     <table class="inv"><thead><tr><th>Name</th><th>Email</th><th>Link</th><th></th></tr></thead>
       <tbody>{rows}</tbody></table>
-    """, eyebrow="Invite buyers")
+    """, eyebrow="Invite buyers", is_admin=True)
 
 
 def render_auction(auction_id, client_id, is_admin, err=""):
@@ -2898,11 +2956,14 @@ def render_auction(auction_id, client_id, is_admin, err=""):
       }}
     </script>
     """, eyebrow=("Auction: " + company +
-                  ((" — " + auc.get("structure")) if auc.get("structure") else "")))
+                  ((" — " + auc.get("structure")) if auc.get("structure") else "")),
+       is_admin=is_admin)
 
 
-def render_watchlist_status(client_id):
-    """Client-facing watchlist: their interests with actionable status. No name shown."""
+def render_watchlist_status(client_id, is_admin=False):
+    """Client-facing watchlist: their interests with actionable status. No name shown.
+    is_admin only controls whether the shell renders the Admin nav button; it never
+    changes what the page shows, so previewing a client with ?as= stays faithful."""
     try:
         jwt = get_jwt()
     except Exception as e:
@@ -3081,7 +3142,7 @@ def render_watchlist_status(client_id):
       .wl-spacer {{ display: none; }}
     </style>
     {body}
-    """)
+    """, is_admin=is_admin)
 
 
 def lambda_handler(event, context):
@@ -3335,6 +3396,8 @@ def lambda_handler(event, context):
     if qs.get("view") == "auction" and qs.get("id"):
         return render_auction(qs["id"], view_id, is_admin and not qs.get("as"),
                               qs.get("err") or "")
+    if qs.get("view") == "admin" and is_admin:
+        return render_admin_hub()
     if qs.get("view") == "auctions" and is_admin:
         return render_auctions_admin()
     if qs.get("view") == "link" and is_admin:
@@ -3360,7 +3423,7 @@ def lambda_handler(event, context):
         return render_portfolio(load_portfolio(view_id), is_admin)
     if qs.get("view") == "admin" and is_admin:
         return render_admin_overview(client_id)
-    return render_watchlist_status(view_id)
+    return render_watchlist_status(view_id, is_admin and not qs.get("as"))
 
 
 # ── Local helper: seed a client's portfolio + mint their magic link ────────────────
