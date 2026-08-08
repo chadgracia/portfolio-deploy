@@ -2225,7 +2225,13 @@ def render_auctions_admin(msg=""):
             f'<td>{html.escape(a.get("status") or "open")}</td>'
             f'<td><a href="?view=auction&amp;id={html.escape(aid, quote=True)}">View</a>'
             f' &middot; <a href="?view=invites&amp;id={html.escape(aid, quote=True)}">'
-            f'Invite buyers</a></td>'
+            f'Invite buyers</a>'
+            f' &middot; <form method="POST" action="?view=auctions" style="display:inline;"'
+            f' onsubmit="return confirm(\'Delete this auction? Bids placed on it are kept '
+            f'in S3 but will no longer be reachable.\');">'
+            f'<input type="hidden" name="action" value="auction_delete">'
+            f'<input type="hidden" name="auction_id" value="{html.escape(aid, quote=True)}">'
+            f'<button type="submit" class="auc-del">Delete</button></form></td>'
             "</tr>"
         )
     if not rows:
@@ -2239,6 +2245,9 @@ def render_auctions_admin(msg=""):
       .auc-grid input {{ width:100%; padding:9px 12px; font-family:inherit; font-size:14px;
                          border:1px solid var(--line); border-radius:6px; }}
       .auc-full {{ grid-column:1 / -1; }}
+      .auc-del {{ border:none; background:none; padding:0; cursor:pointer;
+                  font-family:inherit; font-size:inherit; color:#b45309;
+                  text-decoration:underline; }}
       .auc-btn {{ padding:10px 20px; font-family:inherit; font-size:14px; font-weight:600;
                   border:none; border-radius:6px; background:var(--ink); color:#fff;
                   cursor:pointer; }}
@@ -3307,6 +3316,21 @@ def lambda_handler(event, context):
             if is_admin and qs.get("as"):
                 _back += "&as=" + urllib.parse.quote(qs["as"])
             return {"statusCode": 303, "headers": {"Location": _back}, "body": ""}
+
+        if action == "auction_delete":
+            if not is_admin:
+                return {"statusCode": 403,
+                        "headers": {"Content-Type": "text/plain"},
+                        "body": "forbidden"}
+            _del_id = (form.get("auction_id") or "").strip()
+            if _del_id:
+                _aucs = _load_auctions()
+                if _del_id in _aucs:
+                    del _aucs[_del_id]
+                    _save_auctions(_aucs)
+            return {"statusCode": 303,
+                    "headers": {"Location": raw_path + "?view=auctions"},
+                    "body": ""}
 
         if action == "auction_create":
             if not is_admin:
