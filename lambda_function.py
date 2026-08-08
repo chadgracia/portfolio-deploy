@@ -1979,6 +1979,41 @@ def _parse_body_multi(event):
 
 WL_DEALS_BUCKET = "pipeline-public-deal-data"
 WL_DEALS_KEY = "pipeline_deals.json"
+
+# Person-level Ticket Size multi-select and its dollar tiers (mirrors deal-notifier).
+WL_TICKET_FIELD = "custom_label_3052210"
+WL_TICKET_SIZE_MAP = {
+    6870210: (100_000,     250_000),
+    6631962: (100_000,     250_000),
+    5014552: (251_000,     999_000),
+    5014555: (1_000_000,   5_000_000),
+    5014558: (5_000_000,   10_000_000),
+    5014561: (10_000_000,  25_000_000),
+    5014564: (25_000_000,  50_000_000),
+    5014567: (50_000_000,  100_000_000),
+    5014570: (100_000_000, None),
+}
+
+
+def _wl_ticket_range(cf):
+    """(low, high) in dollars across the person's Ticket Size tiers.
+    (None, None) when the field is empty or unknown — no size filtering then.
+    A tier with no upper bound leaves high as None (nothing is 'too big')."""
+    lo = hi = None
+    unbounded = False
+    for oid in cf_id_list((cf or {}).get(WL_TICKET_FIELD)):
+        tier = WL_TICKET_SIZE_MAP.get(int(oid))
+        if not tier:
+            continue
+        t_lo, t_hi = tier
+        lo = t_lo if lo is None else min(lo, t_lo)
+        if t_hi is None:
+            unbounded = True
+        elif hi is None or t_hi > hi:
+            hi = t_hi
+    if unbounded:
+        hi = None
+    return lo, hi
 WL_HOLDERS_KEY = "holder_counts.json"
 WL_WEBBID_URL = "https://7u6sphgup5gjuywcvpuwzhruiq0asgdz.lambda-url.us-east-1.on.aws/"
 WL_DEAL_URL = "https://ewjul4gl75iopu3yfgxfbmvyoq0tlmqf.lambda-url.us-east-1.on.aws/"
@@ -3063,9 +3098,11 @@ def render_watchlist_status(client_id, is_admin=False):
 
     sides = {"buy": [], "sell": []}
     wl_oid = {}
+    ticket_lo = ticket_hi = None
     if jwt:
         res = call_pipeline_api("GET", f"/people/{client_id}.json", jwt=jwt)
         cf = res["data"].get("custom_fields", {}) if res.get("status") == 200 and isinstance(res.get("data"), dict) else {}
+        ticket_lo, ticket_hi = _wl_ticket_range(cf)
         sec = load_security_maps(jwt)
         for side, field in (("buy", BUY_INTEREST_FIELD), ("sell", SELL_INTEREST_FIELD)):
             id_to_name = sec.get(side, {}).get("id_to_name", {})
@@ -3125,8 +3162,34 @@ def render_watchlist_status(client_id, is_admin=False):
                 safe_cell += f'<div class="wl-cat">{html.escape(_m["catalyst"])}</div>'
             bid = f'{WL_WEBBID_URL}?name={urllib.parse.quote(nm)}'
             if live:
+                def _fit_note(d):
+                    if side != "buy":
+                        return None
+                    dmin = _num(d.get("min_deal_size"))
+                    dmax = _num(d.get("max_deal_size"))
+                    if ticket_hi is not None and dmin is not None and dmin > ticket_hi:
+                        return (f"min {_wl_money(dmin)} &mdash; above your indicated "
+                                "size range. Reply if you'd like to discuss.")
+                    if ticket_lo is not None and dmax is not None and dmax < ticket_lo:
+                        return (f"max {_wl_money(dmax)} &mdash; below your indicated "
+                                "size range.")
+                    return None
+                live = sorted(live, key=lambda d: 1 if _fit_note(d) else 0)
                 first = True
                 for d in live:
+                    note = _fit_note(d)
+                    if note:
+                        rows += (
+                            "<tr>"
+                            + (f'<td class="wl-co" rowspan="{len(live)}">{safe_cell}</td>' if first else "")
+                            + f'<td colspan="5" class="wl-soft">'
+                            + f'{html.escape(d.get("structure") or "")} indication live &mdash; {note}</td>'
+                            + f'<td><a class="wl-act wl-soft" href="{WL_DEAL_URL}?deal_id='
+                            + f'{html.escape(str(d.get("id") or ""), quote=True)}">View deal &rarr;</a></td>'
+                            + "</tr>"
+                        )
+                        first = False
+                        continue
                     did = html.escape(str(d.get("id") or ""), quote=True)
                     price = _num(d.get("net")) or _num(d.get("gross"))
                     price_cell = (_wl_pps(price) if price
