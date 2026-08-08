@@ -2604,6 +2604,12 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                            f'{_wl_money(auc.get("max_size"))}'))
     if facts["shares"]:
         _f.append(("Shares", f"{int(facts['shares']):,}"))
+    _resv = _auc_num(auc.get("ask"))
+    if _resv and is_admin:
+        _rmet = bool(top and top >= _resv)
+        _f.append(("Reserve", f'<strong>{_wl_pps(_resv)}</strong> '
+                              f'<span class="{"au-ok" if _rmet else "au-bad"}">'
+                              f'&middot; {"Met" if _rmet else "Unmet"}</span>'))
     _lr = []
     if facts["lr_date"]:
         _lr.append(("Date", html.escape(_auc_date(facts["lr_date"]))))
@@ -2614,12 +2620,20 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     if facts["lr_val"]:
         _lr.append(("Valuation", f"${facts['lr_val']:,.2f}B"))
     lr_html = ""
-    if _lr:
-        lr_html = ('<div class="au-lr"><div class="au-lrhead">Last round</div>'
-                   '<div class="au-lrgrid">'
-                   + "".join(f'<div><span class="au-lrlbl">{l}</span>'
-                             f'<span class="au-lrval">{v}</span></div>' for l, v in _lr)
-                   + "</div></div>")
+    if _lr or facts["catalyst"]:
+        _left = ""
+        if _lr:
+            _left = ('<div class="au-lrhead">Last round</div><div class="au-lrgrid">'
+                     + "".join(f'<div><span class="au-lrlbl">{l}</span>'
+                               f'<span class="au-lrval">{v}</span></div>' for l, v in _lr)
+                     + "</div>")
+        _right = ""
+        if facts["catalyst"]:
+            _right = ('<div class="au-lrhead">Recent development</div>'
+                      f'<div class="au-lrdev">{html.escape(facts["catalyst"])}</div>')
+        lr_html = (f'<div class="au-lr"><div class="au-lrcols">'
+                   f'<div class="au-lrleft">{_left}</div>'
+                   f'<div class="au-lrright">{_right}</div></div></div>')
     _cells = ""
     for _i in range(0, len(_f), 2):
         _pair = _f[_i:_i + 2]
@@ -2635,16 +2649,23 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                  if facts["logo"] else "")
     desc_html = (f'<p class="au-desc">{html.escape(facts["description"])}</p>'
                  if facts["description"] else "")
-    cat_html = (f'<div class="au-cat"><div class="au-catlbl">Recent development</div>'
-                f'<div>{html.escape(facts["catalyst"])}</div></div>'
-                if facts["catalyst"] else "")
+    cat_html = ""
     notes_html = (f'<div class="au-cat"><div class="au-catlbl">Seller notes</div>'
                   f'<div>{html.escape(facts["notes"])}</div></div>'
                   if facts["notes"] else "")
     _did = str(auc.get("deal_id") or "")
-    id_html = (f'<div class="au-did">Deal ID: {html.escape(_did)}'
-               f'<button type="button" class="au-copy" onclick="auCopy(\'{html.escape(_did, quote=True)}\')"'
-               f' title="Copy">&#10697;</button></div>') if _did else ""
+    _aid_s = str(auction_id)
+    _bits = ""
+    if _did:
+        _bits += (f'<span class="au-idbit">Deal ID: '
+                  f'<a href="https://app.pipelinedeals.com/deals/{html.escape(_did, quote=True)}"'
+                  f' target="_blank">{html.escape(_did)}</a>'
+                  f'<button type="button" class="au-copy" onclick="auCopy(\'{html.escape(_did, quote=True)}\')"'
+                  f' title="Copy deal ID">&#10697;</button></span>')
+    _bits += (f'<span class="au-idbit">Auction ID: {html.escape(_aid_s)}'
+              f'<button type="button" class="au-copy" onclick="auCopy(\'{html.escape(_aid_s, quote=True)}\')"'
+              f' title="Copy auction ID">&#10697;</button></span>')
+    id_html = f'<div class="au-did">{_bits}</div>'
     header_html = (f'<div class="au-head">{logo_html}'
                    f'<div class="au-headtext"><h1>{html.escape(company)}'
                    f'{(" &mdash; " + html.escape(auc.get("structure"))) if auc.get("structure") else ""}</h1>'
@@ -2951,6 +2972,11 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                     color:#6b7280; font-weight:600; margin-bottom:8px; }}
       .au-lrgrid {{ display:flex; flex-wrap:wrap; gap:8px 28px; }}
       .au-lrgrid > div {{ display:flex; flex-direction:column; }}
+      .au-idbit {{ margin-right:18px; white-space:nowrap; }}
+      .au-lrcols {{ display:flex; gap:26px; align-items:flex-start; flex-wrap:wrap; }}
+      .au-lrleft {{ flex:1 1 300px; min-width:0; }}
+      .au-lrright {{ flex:1 1 220px; min-width:0; }}
+      .au-lrdev {{ font-size:14px; line-height:1.45; }}
       .au-boxhead {{ font-size:11px; letter-spacing:.07em; text-transform:uppercase;
                      color:#6b7280; font-weight:600; margin-bottom:12px; }}
       .au-bstats {{ display:flex; gap:26px; padding-bottom:14px; margin-bottom:14px;
