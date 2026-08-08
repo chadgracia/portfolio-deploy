@@ -2581,8 +2581,6 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                 f'<div class="au-val">{value}</div></div>')
 
     stats = ""
-    if is_admin and auc.get("ask"):
-        stats += stat("Reserve", _wl_pps(auc.get("ask")))
     _buyers = _wl_buyers(company) or int(auc.get("buyers") or 0)
     bid_stats = ""
     if top:
