@@ -2890,6 +2890,36 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     note = (f'<p class="au-note">{html.escape(auc.get("note") or "")}</p>'
             if auc.get("note") else "")
     stats_block = f'<div class="au-stats">{stats}</div>' if stats.strip() else ""
+
+    edit_html = ""
+    if is_admin:
+        def _v(k):
+            x = auc.get(k)
+            if x in (None, ""):
+                return ""
+            if isinstance(x, float) and x == int(x):
+                x = int(x)
+            return html.escape(str(x), quote=True)
+        edit_html = f"""
+        <details class="au-edit">
+          <summary>Edit auction</summary>
+          <form method="POST" action="?view=auction&amp;id={html.escape(str(auction_id), quote=True)}">
+            <input type="hidden" name="action" value="auction_update">
+            <input type="hidden" name="auction_id" value="{html.escape(str(auction_id), quote=True)}">
+            <div class="au-egrid">
+              <div><label>Structure</label><input name="structure" value="{_v('structure')}"></div>
+              <div><label>Shares</label><input name="shares" value="{_v('shares')}"></div>
+              <div><label>Min size ($)</label><input name="min_size" value="{_v('min_size')}"></div>
+              <div><label>Max size ($)</label><input name="max_size" value="{_v('max_size')}"></div>
+              <div><label>Reserve ($/share)</label><input name="ask" value="{_v('ask')}"></div>
+              <div><label>Bids close</label><input name="close_date" type="date" value="{_v('close_date')}"></div>
+              <div class="au-full"><label>Note to buyers</label>
+                <input name="note" value="{_v('note')}"></div>
+              <div class="au-full"><button class="au-btn" type="submit">Save changes</button></div>
+            </div>
+          </form>
+        </details>
+        """
     if auc.get("close_date"):
         note = (f'<p class="au-deadline">Bids close {html.escape(_auc_date(auc["close_date"]))}.</p>'
                 + note)
@@ -2929,6 +2959,15 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                                          font-size:14px; border:1px solid var(--line);
                                          border-radius:6px; }}
       .au-full {{ grid-column:1 / -1; }}
+      .au-edit {{ border:1px solid var(--line); border-radius:8px; padding:12px 16px;
+                  margin:0 0 18px; background:#fff; }}
+      .au-edit summary {{ cursor:pointer; font-size:11px; letter-spacing:.06em;
+                          text-transform:uppercase; color:#6b7280; font-weight:600; }}
+      .au-egrid {{ display:grid; grid-template-columns:repeat(2,minmax(160px,1fr));
+                   gap:12px 16px; margin-top:14px; }}
+      .au-egrid label {{ display:block; font-size:13px; font-weight:600; margin-bottom:4px; }}
+      .au-egrid input {{ width:100%; padding:9px 12px; font-family:inherit; font-size:14px;
+                         border:1px solid var(--line); border-radius:6px; }}
       .au-btn {{ padding:11px 24px; font-family:inherit; font-size:15px; font-weight:600;
                  border:none; border-radius:6px; background:var(--ink); color:#fff;
                  cursor:pointer; }}
@@ -3002,7 +3041,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     {header_html}
     {note}
     <div class="{'au-cols' if side_panel else ''}">
-      <div class="au-main">{details_html}{book}</div>
+      <div class="au-main">{details_html}{edit_html}{book}</div>
       {f'<div class="au-side">{stats_block}{side_panel}</div>' if side_panel else stats_block}
     </div>
     <script>
@@ -3359,6 +3398,25 @@ def lambda_handler(event, context):
             _back = raw_path + "?view=auction&id=" + urllib.parse.quote(_aid)
             if is_admin and qs.get("as"):
                 _back += "&as=" + urllib.parse.quote(qs["as"])
+            return {"statusCode": 303, "headers": {"Location": _back}, "body": ""}
+
+        if action == "auction_update":
+            if not is_admin:
+                return {"statusCode": 403,
+                        "headers": {"Content-Type": "text/plain"},
+                        "body": "forbidden"}
+            _up_id = (form.get("auction_id") or "").strip()
+            _aucs = _load_auctions()
+            _rec = _aucs.get(_up_id)
+            if _rec is not None:
+                _rec["structure"] = (form.get("structure") or "").strip()
+                _rec["note"] = (form.get("note") or "").strip()
+                _rec["close_date"] = (form.get("close_date") or "").strip()
+                for _k in ("shares", "min_size", "max_size", "ask"):
+                    _rec[_k] = _auc_num(form.get(_k))
+                _aucs[_up_id] = _rec
+                _save_auctions(_aucs)
+            _back = raw_path + "?view=auction&id=" + urllib.parse.quote(_up_id)
             return {"statusCode": 303, "headers": {"Location": _back}, "body": ""}
 
         if action == "auction_delete":
