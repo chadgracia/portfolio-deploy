@@ -52,6 +52,12 @@ ADMIN_CLIENT_ID = os.environ.get("ADMIN_CLIENT_ID", "")
 # Pipeline (PD) person page; the admin roll-up links each Client ID here (new tab).
 PD_PERSON_URL = "https://app.pipelinecrm.com/people/"
 
+# The Lambda that rebuilds interest_people.json (buy/sell interest by company). It
+# runs on a daily schedule; the invites page can also drive it on demand, which
+# needs lambda:InvokeFunction on this function in the portfolio's execution role.
+HOLDER_COUNTS_FUNCTION = "holder-counts"
+HOLDER_COUNTS_REGION   = "us-east-1"
+
 # Where client action emails (Get Bids / Get Offers / Feature Request) are sent.
 CHAD_EMAIL = "cgracia@rainmakersecurities.com"
 SES_SENDER = "agent@agent.graciagroup.com"   # already a verified SES sender
@@ -2500,16 +2506,56 @@ def _auction_deal_facts(deal_id, company_name):
     return out
 
 
-def render_auction_invites(auction_id, base_url):
+def _interest_built_text(raw):
+    """Prose for interest_people.json's last_updated, e.g.
+    "Buyer list built August 7, 2026 at 15:33 UTC."
+
+    The file is written by another Lambda, so the value's exact shape isn't ours to
+    assume: ISO-8601 (with or without T, Z, offset or microseconds), a bare date, and
+    a unix epoch all parse. Anything else is shown verbatim rather than swallowed, and
+    a missing key says so outright instead of implying the list is fresh."""
+    s = str(raw or "").strip()
+    if not s:
+        return "Buyer list build time unknown &mdash; interest_people.json has no last_updated key."
+    dt, has_time = None, False
+    if re.fullmatch(r"\d{9,13}", s):                     # unix epoch, seconds or millis
+        try:
+            _ts = int(s)
+            dt = datetime.fromtimestamp(_ts / 1000 if len(s) > 10 else _ts, timezone.utc)
+            has_time = True
+        except (ValueError, OSError, OverflowError):
+            dt = None
+    if dt is None:
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00").replace(" ", "T", 1))
+            has_time = ":" in s                           # a bare date has no clock
+        except ValueError:
+            dt = None
+    if dt is None:
+        pretty = _auc_date(s)                             # bare date -> prose, else raw
+        if pretty != s:
+            return f"Buyer list built {html.escape(pretty)}."
+        return f"Buyer list built &mdash; unrecognised timestamp {html.escape(s)}."
+    dt = dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    if not has_time:
+        return f"Buyer list built {html.escape(_auc_date(dt.strftime('%Y-%m-%d')))}."
+    return (f"Buyer list built {html.escape(_auc_date(dt.strftime('%Y-%m-%d')))} "
+            f"at {dt.strftime('%H:%M')} UTC.")
+
+
+def render_auction_invites(auction_id, base_url, err=""):
     """Admin-only: name, email and magic link for every buyer of this company."""
     auc = (_load_auctions() or {}).get(str(auction_id))
     if not auc:
         return html_response("<h1>Auction not found</h1>")
     company = auc.get("company") or ""
+    _built_raw = ""
     try:
         obj = boto3.client("s3").get_object(Bucket=COMPANIES_BUCKET,
                                             Key="interest_people.json")
-        pids = (json.loads(obj["Body"].read()).get("buy") or {}).get(company) or []
+        _people = json.loads(obj["Body"].read())
+        pids = (_people.get("buy") or {}).get(company) or []
+        _built_raw = _people.get("last_updated") or ""
     except Exception as e:
         print(f"invites: could not load interest_people.json: {e}")
         pids = []
@@ -2534,6 +2580,20 @@ def render_auction_invites(auction_id, base_url):
     if not rows:
         rows = ('<tr><td colspan="4" class="wl-soft">No buyers found for this company '
                 'in interest_people.json.</td></tr>')
+
+    _aid_q = html.escape(str(auction_id), quote=True)
+    built_html = f'<p class="inv-built">{_interest_built_text(_built_raw)}</p>'
+    # err arrives via the redirect after a failed refresh, so it is attacker-influenced
+    # only by an admin's own URL bar; escape it anyway before reflecting it.
+    err_html = f'<p class="inv-err">{html.escape(err)}</p>' if err else ""
+    refresh_html = f"""
+    <form class="inv-refresh" method="POST" action="?view=invites&amp;id={_aid_q}"
+          onsubmit="return invRefresh(this);">
+      <input type="hidden" name="action" value="interest_refresh">
+      <input type="hidden" name="auction_id" value="{_aid_q}">
+      <button type="submit" class="inv-btn">Refresh buyer list</button>
+      <span class="wl-soft inv-hint">Rebuilds from Pipeline &mdash; takes about eight seconds.</span>
+    </form>"""
     return html_response(f"""
     <style>
       table.inv {{ width:100%; border-collapse:collapse; font-size:14px; }}
@@ -2543,12 +2603,37 @@ def render_auction_invites(auction_id, base_url):
       .inv-url {{ width:100%; font-family:ui-monospace,monospace; font-size:11px;
                   border:none; background:none; }}
       .wl-soft {{ color:#6b7280; }}
+      .inv-built {{ font-size:13px; color:#6b7280; margin:0 0 14px; }}
+      .inv-err {{ font-size:13px; color:#b45309; font-weight:600; margin:0 0 14px; }}
+      .inv-refresh {{ display:flex; align-items:center; gap:12px;
+                      flex-wrap:wrap; margin:0 0 18px; }}
+      .inv-btn {{ padding:9px 16px; font-family:inherit; font-size:14px; font-weight:600;
+                  border:1px solid var(--line); border-radius:6px; background:#fff;
+                  color:inherit; cursor:pointer; }}
+      .inv-btn:hover:enabled {{ border-color:var(--ink); }}
+      .inv-btn:disabled {{ opacity:.55; cursor:default; }}
+      .inv-hint {{ font-size:12px; }}
     </style>
     <h1>Invite buyers &mdash; {html.escape(company)}</h1>
     <p class="sub">{len(pids)} buyer{'' if len(pids) == 1 else 's'} carry this company in
     Buy Interest. Each link signs that person in; do not forward them.</p>
+    {built_html}
+    {err_html}
+    {refresh_html}
     <table class="inv"><thead><tr><th>Name</th><th>Email</th><th>Link</th><th></th></tr></thead>
       <tbody>{rows}</tbody></table>
+    <script>
+      function invRefresh(f) {{
+        var b = f.querySelector("button");
+        var h = f.querySelector(".inv-hint");
+        b.textContent = "Refreshing\\u2026";
+        if (h) {{ h.textContent = "Rebuilding the buyer list; this takes about eight seconds."; }}
+        // Disable after the submit is under way: a button disabled synchronously in
+        // onsubmit is dropped from the POST body by some browsers.
+        setTimeout(function () {{ b.disabled = true; }}, 0);
+        return true;
+      }}
+    </script>
     """, eyebrow="Invite buyers", is_admin=True)
 
 
@@ -3386,6 +3471,53 @@ def lambda_handler(event, context):
                 _back += "&as=" + urllib.parse.quote(qs["as"])
             return {"statusCode": 303, "headers": {"Location": _back}, "body": ""}
 
+        if action == "interest_refresh":
+            if not is_admin:
+                return {"statusCode": 403,
+                        "headers": {"Content-Type": "text/plain"},
+                        "body": "forbidden"}
+            _ir_id = (form.get("auction_id") or "").strip()
+            _ir_err = ""
+            try:
+                # RequestResponse blocks until holder-counts finishes (~8s), so the
+                # rebuilt interest_people.json is already in S3 by the time we redirect.
+                # max_attempts=1 disables botocore's retries: a retried invoke would run
+                # the rebuild twice rather than fail cleanly.
+                _ir_cfg = BotoConfig(connect_timeout=5, read_timeout=120,
+                                     retries={"max_attempts": 1})
+                _ir_res = boto3.client("lambda", region_name=HOLDER_COUNTS_REGION,
+                                       config=_ir_cfg).invoke(
+                    FunctionName=HOLDER_COUNTS_FUNCTION,
+                    InvocationType="RequestResponse")
+                if _ir_res.get("FunctionError"):
+                    _ir_body = ""
+                    try:
+                        _ir_body = (_ir_res["Payload"].read() or b"").decode("utf-8", "replace")
+                    except Exception:
+                        pass
+                    _ir_err = (f"{HOLDER_COUNTS_FUNCTION} ran but returned an error "
+                               f"({_ir_res['FunctionError']}): {_ir_body[:300]}")
+            except ClientError as e:
+                _code = (e.response.get("Error") or {}).get("Code") or ""
+                if _code in ("AccessDeniedException", "AccessDenied"):
+                    _ir_err = (f"Not permitted to run {HOLDER_COUNTS_FUNCTION}. This "
+                               f"function's execution role needs lambda:InvokeFunction on "
+                               f"arn:aws:lambda:{HOLDER_COUNTS_REGION}:*:function:"
+                               f"{HOLDER_COUNTS_FUNCTION}.")
+                elif _code == "ResourceNotFoundException":
+                    _ir_err = (f"No Lambda named {HOLDER_COUNTS_FUNCTION} in "
+                               f"{HOLDER_COUNTS_REGION}.")
+                else:
+                    _ir_err = f"Could not run {HOLDER_COUNTS_FUNCTION} ({_code or e})."
+            except Exception as e:
+                _ir_err = f"Could not run {HOLDER_COUNTS_FUNCTION}: {e}"
+            if _ir_err:
+                print(f"interest_refresh: {_ir_err}")
+            _back = raw_path + "?view=invites&id=" + urllib.parse.quote(_ir_id)
+            if _ir_err:
+                _back += "&err=" + urllib.parse.quote(_ir_err[:300])
+            return {"statusCode": 303, "headers": {"Location": _back}, "body": ""}
+
         if action == "auction_update":
             if not is_admin:
                 return {"statusCode": 403,
@@ -3506,7 +3638,8 @@ def lambda_handler(event, context):
     view_id = qs["as"] if (is_admin and qs.get("as")) else client_id
     if qs.get("view") == "invites" and qs.get("id") and is_admin:
         return render_auction_invites(qs["id"],
-                                      "https://" + event["requestContext"]["domainName"])
+                                      "https://" + event["requestContext"]["domainName"],
+                                      qs.get("err") or "")
     if qs.get("view") == "auction" and qs.get("id"):
         return render_auction(qs["id"], view_id, is_admin and not qs.get("as"),
                               qs.get("err") or "")
