@@ -2001,6 +2001,34 @@ WL_TICKET_SIZE_MAP = {
 }
 
 
+def _wl_structure_label(d):
+    """Structure cell for a watchlist deal row, annotated with layers and fees:
+    'Fund (1L - 5/0/10)' = structure (layers - seller_fee/management_fee/carry).
+    Fees show only when at least one of the three is recorded; layers only when
+    recognized. Falls back to the bare structure string."""
+    base = (d.get("structure") or "").strip()
+    layers_val = (d.get("layers") or "").strip()
+    layer = {"spv on cap table": "1L", "2-layer spv": "2L",
+             "3-layer spv": "3L"}.get(layers_val.lower(), "")
+
+    def _fee(v):
+        try:
+            f = float(str(v).replace("%", "").strip())
+        except (TypeError, ValueError):
+            return None
+        return int(f) if f == int(f) else f
+    fees = [_fee(d.get("seller_fee")), _fee(d.get("management_fee")),
+            _fee(d.get("carry"))]
+    fee_str = ("/".join("0" if f is None else str(f) for f in fees)
+               if any(f is not None for f in fees) else "")
+
+    if layer and fee_str:
+        note = f"{layer} - {fee_str}"
+    else:
+        note = layer or fee_str
+    return f"{base} ({note})" if (base and note) else (base or note)
+
+
 def _wl_ticket_range(cf):
     """(low, high) in dollars across the person's Ticket Size tiers.
     (None, None) when the field is empty or unknown — no size filtering then.
@@ -3290,7 +3318,7 @@ def render_watchlist_status(client_id, is_admin=False):
                     rows += (
                         "<tr>"
                         + (f'<td class="wl-co" rowspan="{len(live)}">{safe_cell}</td>' if first else "")
-                        + f'<td>{html.escape(d.get("structure") or "")}</td>'
+                        + f'<td>{html.escape(_wl_structure_label(d))}</td>'
                         + f'<td>{price_cell}</td>'
                         + f'<td>{lr_cell}</td>'
                         + f'<td>{prem_cell}</td>'
