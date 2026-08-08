@@ -2461,7 +2461,7 @@ def _auction_deal_facts(deal_id, company_name):
     """Key data points for the seeded deal plus its company. Never raises."""
     out = {"logo": "", "description": "", "catalyst": "", "share_class": "",
            "shares": None, "notes": "", "lr_pps": None, "lr_val": None,
-           "lr_series": "", "lr_date": ""}
+           "lr_series": "", "lr_date": "", "seller": ""}
     try:
         norm = re.sub(r"[^a-zA-Z0-9]", "", company_name or "")
         if norm:
@@ -2600,9 +2600,14 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     _resv = _auc_num(auc.get("ask"))
     if _resv and is_admin:
         _rmet = bool(top and top >= _resv)
-        _f.append(("Reserve", f'<strong>{_wl_pps(_resv)}</strong> '
-                              f'<span class="{"au-ok" if _rmet else "au-bad"}">'
-                              f'&middot; {"Met" if _rmet else "Unmet"}</span>'))
+        _rhtml = (f'<strong>{_wl_pps(_resv)}</strong> '
+                  f'<span class="{"au-ok" if _rmet else "au-unmet"}">'
+                  f'&middot; {"Met" if _rmet else "Unmet"}</span>')
+        _seller = (facts.get("seller") or "").strip()
+        if _seller:
+            _rhtml += (f' <span class="au-seller">&middot; '
+                       f'{html.escape(_seller.split()[-1])}</span>')
+        _f.append(("Reserve", _rhtml))
     _lr = []
     if facts["lr_date"]:
         _lr.append(("Date", html.escape(_auc_date(facts["lr_date"]))))
@@ -2666,6 +2671,10 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     details_html = (f'<div class="au-details"><div class="au-boxhead">Deal details</div>'
                     f'{facts_rows}{cat_html}{notes_html}{lr_html}</div>'
                     if (facts_rows or cat_html or notes_html or lr_html) else "")
+
+    deadline_html = (f'<p class="au-deadline">Bids close '
+                     f'{html.escape(_auc_date(auc.get("close_date")))}.</p>'
+                     if auc.get("close_date") else "")
 
     side_panel = ""
     if is_admin:
@@ -2800,6 +2809,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
             </div>
           </form>
         </div>
+        {deadline_html}
         <script>
           (function () {{
             // Live thousands separators on the size fields — six-figure sizes are
@@ -2912,17 +2922,16 @@ def render_auction(auction_id, client_id, is_admin, err=""):
           </form>
         </details>
         """
-    if auc.get("close_date"):
-        note = (f'<p class="au-deadline">Bids close {html.escape(_auc_date(auc["close_date"]))}.</p>'
-                + note)
 
     return html_response(f"""
     <style>
       .au-note {{ font-style:italic; color:#6b7280; margin:0 0 16px; }}
       .au-ok {{ color:#1f7a4d; font-weight:600; }}
       .au-bad {{ color:#b45309; font-weight:600; }}
+      .au-unmet {{ color:#b91c1c; font-weight:600; }}
+      .au-seller {{ color:#6b7280; font-weight:400; }}
       .au-lead {{ color:#1f7a4d; font-weight:600; }}
-      .au-deadline {{ font-weight:600; margin:0 0 6px; }}
+      .au-deadline {{ font-weight:600; margin:10px 0 0; }}
       .au-alertrow {{ display:flex; align-items:center; gap:10px; margin:2px 0 12px; }}
       .au-switch {{ position:relative; display:inline-block; width:40px; height:22px; flex:none; }}
       .au-switch input {{ opacity:0; width:0; height:0; }}
