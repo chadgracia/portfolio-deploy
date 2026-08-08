@@ -46,8 +46,10 @@ IDENTITY_SECRET = os.environ.get("IDENTITY_SECRET", "")  # shared with trades-gr
 COOKIE_NAME  = "gg_session"
 SESSION_DAYS = 365
 
-# Admin gate: the one client_id allowed to invite others. Set in the Lambda env.
-ADMIN_CLIENT_ID = os.environ.get("ADMIN_CLIENT_ID", "")
+# Admin gate: the client_ids allowed to invite others. Set in the Lambda env as a
+# comma-separated list ("123" or "123,456"); blank entries and stray spaces are ignored.
+ADMIN_CLIENT_IDS = {p.strip() for p in os.environ.get("ADMIN_CLIENT_ID", "").split(",")
+                    if p.strip()}
 
 # Pipeline (PD) person page; the admin roll-up links each Client ID here (new tab).
 PD_PERSON_URL = "https://app.pipelinecrm.com/people/"
@@ -1983,6 +1985,41 @@ def _parse_body_multi(event):
 
 WL_DEALS_BUCKET = "pipeline-public-deal-data"
 WL_DEALS_KEY = "pipeline_deals.json"
+
+# Person-level Ticket Size multi-select and its dollar tiers (mirrors deal-notifier).
+WL_TICKET_FIELD = "custom_label_3052210"
+WL_TICKET_SIZE_MAP = {
+    6870210: (100_000,     250_000),
+    6631962: (100_000,     250_000),
+    5014552: (251_000,     999_000),
+    5014555: (1_000_000,   5_000_000),
+    5014558: (5_000_000,   10_000_000),
+    5014561: (10_000_000,  25_000_000),
+    5014564: (25_000_000,  50_000_000),
+    5014567: (50_000_000,  100_000_000),
+    5014570: (100_000_000, None),
+}
+
+
+def _wl_ticket_range(cf):
+    """(low, high) in dollars across the person's Ticket Size tiers.
+    (None, None) when the field is empty or unknown — no size filtering then.
+    A tier with no upper bound leaves high as None (nothing is 'too big')."""
+    lo = hi = None
+    unbounded = False
+    for oid in cf_id_list((cf or {}).get(WL_TICKET_FIELD)):
+        tier = WL_TICKET_SIZE_MAP.get(int(oid))
+        if not tier:
+            continue
+        t_lo, t_hi = tier
+        lo = t_lo if lo is None else min(lo, t_lo)
+        if t_hi is None:
+            unbounded = True
+        elif hi is None or t_hi > hi:
+            hi = t_hi
+    if unbounded:
+        hi = None
+    return lo, hi
 WL_HOLDERS_KEY = "holder_counts.json"
 WL_WEBBID_URL = "https://7u6sphgup5gjuywcvpuwzhruiq0asgdz.lambda-url.us-east-1.on.aws/"
 WL_DEAL_URL = "https://ewjul4gl75iopu3yfgxfbmvyoq0tlmqf.lambda-url.us-east-1.on.aws/"
@@ -2467,7 +2504,7 @@ def _auction_deal_facts(deal_id, company_name):
     """Key data points for the seeded deal plus its company. Never raises."""
     out = {"logo": "", "description": "", "catalyst": "", "share_class": "",
            "shares": None, "notes": "", "lr_pps": None, "lr_val": None,
-           "lr_series": "", "lr_date": ""}
+           "lr_series": "", "lr_date": "", "seller": ""}
     try:
         norm = re.sub(r"[^a-zA-Z0-9]", "", company_name or "")
         if norm:
@@ -2685,9 +2722,14 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     _resv = _auc_num(auc.get("ask"))
     if _resv and is_admin:
         _rmet = bool(top and top >= _resv)
-        _f.append(("Reserve", f'<strong>{_wl_pps(_resv)}</strong> '
-                              f'<span class="{"au-ok" if _rmet else "au-bad"}">'
-                              f'&middot; {"Met" if _rmet else "Unmet"}</span>'))
+        _rhtml = (f'<strong>{_wl_pps(_resv)}</strong> '
+                  f'<span class="{"au-ok" if _rmet else "au-unmet"}">'
+                  f'&middot; {"Met" if _rmet else "Unmet"}</span>')
+        _seller = (facts.get("seller") or "").strip()
+        if _seller:
+            _rhtml += (f' <span class="au-seller">&middot; '
+                       f'{html.escape(_seller.split()[-1])}</span>')
+        _f.append(("Reserve", _rhtml))
     _lr = []
     if facts["lr_date"]:
         _lr.append(("Date", html.escape(_auc_date(facts["lr_date"]))))
@@ -2751,6 +2793,10 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     details_html = (f'<div class="au-details"><div class="au-boxhead">Deal details</div>'
                     f'{facts_rows}{cat_html}{notes_html}{lr_html}</div>'
                     if (facts_rows or cat_html or notes_html or lr_html) else "")
+
+    deadline_html = (f'<p class="au-deadline">Bids close '
+                     f'{html.escape(_auc_date(auc.get("close_date")))}.</p>'
+                     if auc.get("close_date") else "")
 
     side_panel = ""
     if is_admin:
@@ -2885,6 +2931,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
             </div>
           </form>
         </div>
+        {deadline_html}
         <script>
           (function () {{
             // Live thousands separators on the size fields — six-figure sizes are
@@ -2997,17 +3044,16 @@ def render_auction(auction_id, client_id, is_admin, err=""):
           </form>
         </details>
         """
-    if auc.get("close_date"):
-        note = (f'<p class="au-deadline">Bids close {html.escape(_auc_date(auc["close_date"]))}.</p>'
-                + note)
 
     return html_response(f"""
     <style>
       .au-note {{ font-style:italic; color:#6b7280; margin:0 0 16px; }}
       .au-ok {{ color:#1f7a4d; font-weight:600; }}
       .au-bad {{ color:#b45309; font-weight:600; }}
+      .au-unmet {{ color:#b91c1c; font-weight:600; }}
+      .au-seller {{ color:#6b7280; font-weight:400; }}
       .au-lead {{ color:#1f7a4d; font-weight:600; }}
-      .au-deadline {{ font-weight:600; margin:0 0 6px; }}
+      .au-deadline {{ font-weight:600; margin:10px 0 0; }}
       .au-alertrow {{ display:flex; align-items:center; gap:10px; margin:2px 0 12px; }}
       .au-switch {{ position:relative; display:inline-block; width:40px; height:22px; flex:none; }}
       .au-switch input {{ opacity:0; width:0; height:0; }}
@@ -3137,9 +3183,11 @@ def render_watchlist_status(client_id, is_admin=False):
 
     sides = {"buy": [], "sell": []}
     wl_oid = {}
+    ticket_lo = ticket_hi = None
     if jwt:
         res = call_pipeline_api("GET", f"/people/{client_id}.json", jwt=jwt)
         cf = res["data"].get("custom_fields", {}) if res.get("status") == 200 and isinstance(res.get("data"), dict) else {}
+        ticket_lo, ticket_hi = _wl_ticket_range(cf)
         sec = load_security_maps(jwt)
         for side, field in (("buy", BUY_INTEREST_FIELD), ("sell", SELL_INTEREST_FIELD)):
             id_to_name = sec.get(side, {}).get("id_to_name", {})
@@ -3199,8 +3247,34 @@ def render_watchlist_status(client_id, is_admin=False):
                 safe_cell += f'<div class="wl-cat">{html.escape(_m["catalyst"])}</div>'
             bid = f'{WL_WEBBID_URL}?name={urllib.parse.quote(nm)}'
             if live:
+                def _fit_note(d):
+                    if side != "buy":
+                        return None
+                    dmin = _num(d.get("min_deal_size"))
+                    dmax = _num(d.get("max_deal_size"))
+                    if ticket_hi is not None and dmin is not None and dmin > ticket_hi:
+                        return (f"min {_wl_money(dmin)} &mdash; above your indicated "
+                                "size range. Reply if you'd like to discuss.")
+                    if ticket_lo is not None and dmax is not None and dmax < ticket_lo:
+                        return (f"max {_wl_money(dmax)} &mdash; below your indicated "
+                                "size range.")
+                    return None
+                live = sorted(live, key=lambda d: 1 if _fit_note(d) else 0)
                 first = True
                 for d in live:
+                    note = _fit_note(d)
+                    if note:
+                        rows += (
+                            "<tr>"
+                            + (f'<td class="wl-co" rowspan="{len(live)}">{safe_cell}</td>' if first else "")
+                            + f'<td colspan="5" class="wl-soft">'
+                            + f'{html.escape(d.get("structure") or "")} indication live &mdash; {note}</td>'
+                            + f'<td><a class="wl-act wl-soft" href="{WL_DEAL_URL}?deal_id='
+                            + f'{html.escape(str(d.get("id") or ""), quote=True)}">View deal &rarr;</a></td>'
+                            + "</tr>"
+                        )
+                        first = False
+                        continue
                     did = html.escape(str(d.get("id") or ""), quote=True)
                     price = _num(d.get("net")) or _num(d.get("gross"))
                     price_cell = (_wl_pps(price) if price
@@ -3354,8 +3428,8 @@ def lambda_handler(event, context):
     if not client_id:
         return html_response(login_required("Please open your personal portfolio link."), 401)
 
-    # Server-side admin gate: only this client_id may mint invites to any portfolio.
-    is_admin = bool(ADMIN_CLIENT_ID) and client_id == ADMIN_CLIENT_ID
+    # Server-side admin gate: only these client_ids may mint invites to any portfolio.
+    is_admin = client_id in ADMIN_CLIENT_IDS
 
     if method == "POST":
         form = _parse_body(event)
