@@ -2215,27 +2215,39 @@ def render_auctions_admin(msg=""):
     rows = ""
     for aid, a in sorted(_load_auctions().items(),
                          key=lambda kv: kv[1].get("created_at") or "", reverse=True):
+        _bids = _load_auction_bids(aid)
+        _ranked = sorted(_bids.values(),
+                         key=lambda b: -(_auc_num(b.get("gross")) or 0))
+        _topb = _ranked[0] if _ranked else None
+        _topv = _auc_num(_topb.get("gross")) if _topb else None
+        # Precomputed: a nested "shares" lookup inside the f-string below would
+        # collide with the quotes already delimiting it.
+        _shares = a.get("shares")
+        _shares_cell = f"{int(_shares):,}" if _shares else "&mdash;"
         rows += (
             "<tr>"
             f'<td><strong>{html.escape(a.get("company") or "")}</strong></td>'
             f'<td>{_wl_pps(a.get("ask")) if a.get("ask") else "&mdash;"}</td>'
+            f'<td>{_wl_pps(_topv) if _topv else "&mdash;"}</td>'
+            f'<td>{html.escape((_topb.get("name") or _topb.get("email") or "")) if _topb else "&mdash;"}</td>'
             f'<td>{_wl_money(a.get("min_size")) if a.get("min_size") else "&mdash;"} &ndash; '
             f'{_wl_money(a.get("max_size")) if a.get("max_size") else "&mdash;"}</td>'
-            f'<td>{f"{int(a.get(chr(115)+chr(104)+chr(97)+chr(114)+chr(101)+chr(115))):,}" if a.get("shares") else "&mdash;"}</td>'
-            f'<td>{html.escape(a.get("status") or "open")}</td>'
+            f'<td>{_shares_cell}</td>'
+            f'<td class="auc-id">{html.escape(aid)}'
+            f'<button type="button" class="auc-copy" onclick="aucCopy(\'{html.escape(aid, quote=True)}\')"'
+            f' title="Copy auction ID">&#10697;</button></td>'
             f'<td><a href="?view=auction&amp;id={html.escape(aid, quote=True)}">View</a>'
-            f' &middot; <a href="?view=invites&amp;id={html.escape(aid, quote=True)}">'
-            f'Invite buyers</a>'
+            f' &middot; <a href="?view=invites&amp;id={html.escape(aid, quote=True)}">Invite</a>'
             f' &middot; <form method="POST" action="?view=auctions" style="display:inline;"'
-            f' onsubmit="return confirm(\'Delete this auction? Bids placed on it are kept '
-            f'in S3 but will no longer be reachable.\');">'
+            f' onsubmit="return confirm(\'Delete this auction? Bids are kept in S3 but '
+            f'will no longer be reachable.\');">'
             f'<input type="hidden" name="action" value="auction_delete">'
             f'<input type="hidden" name="auction_id" value="{html.escape(aid, quote=True)}">'
             f'<button type="submit" class="auc-del">Delete</button></form></td>'
             "</tr>"
         )
     if not rows:
-        rows = '<tr><td colspan="6" class="wl-soft">No auctions yet.</td></tr>'
+        rows = '<tr><td colspan="8" class="wl-soft">No auctions yet.</td></tr>'
     banner = f'<p style="color:#1f7a4d; font-weight:600;">{html.escape(msg)}</p>' if msg else ""
     return html_response(f"""
     <style>
@@ -2245,6 +2257,9 @@ def render_auctions_admin(msg=""):
       .auc-grid input {{ width:100%; padding:9px 12px; font-family:inherit; font-size:14px;
                          border:1px solid var(--line); border-radius:6px; }}
       .auc-full {{ grid-column:1 / -1; }}
+      .auc-id {{ font-family:ui-monospace,monospace; font-size:12px; white-space:nowrap; }}
+      .auc-copy {{ border:none; background:none; cursor:pointer; color:#6b7280;
+                   font-size:13px; padding:0 4px; }}
       .auc-del {{ border:none; background:none; padding:0; cursor:pointer;
                   font-family:inherit; font-size:inherit; color:#b45309;
                   text-decoration:underline; }}
@@ -2265,11 +2280,10 @@ def render_auctions_admin(msg=""):
       <div class="auc-grid">
         <div><label>Company</label><input name="company" required placeholder="Hadrian"></div>
         <div><label>Seed deal ID (optional)</label><input name="deal_id" placeholder="55266875"></div>
-        <div><label>Ask price per share</label><input name="ask" placeholder="110"></div>
+        <div><label>Reserve price per share</label><input name="ask" placeholder="110"></div>
         <div><label>Shares (optional)</label><input name="shares" placeholder="100000"></div>
         <div><label>Structure</label><input name="structure" placeholder="Direct Transfer"></div>
         <div><label>Bids close (blank = open-ended)</label><input name="close_date" type="date"></div>
-        <div><label>Buyers in book</label><input name="buyers" placeholder="20"></div>
         <div><label>Min size ($)</label><input name="min_size" placeholder="250000"></div>
         <div><label>Max size ($)</label><input name="max_size" placeholder="10000000"></div>
         <div class="auc-full"><label>Note to buyers (optional)</label>
@@ -2278,9 +2292,13 @@ def render_auctions_admin(msg=""):
       </div>
     </form>
     <h2 class="wl-h2">Live auctions</h2>
-    <table class="auc"><thead><tr><th>Company</th><th>Ask</th><th>Size</th>
-      <th>Shares</th><th>Status</th><th></th></tr></thead>
+    <table class="auc">
+      <thead><tr><th>Company</th><th>Reserve</th><th>Top bid</th><th>Top bidder</th>
+        <th>Size</th><th>Shares</th><th>Auction ID</th><th></th></tr></thead>
       <tbody>{rows}</tbody></table>
+    <script>
+      function aucCopy(t) {{ navigator.clipboard.writeText(t); }}
+    </script>
     """, is_admin=True)
 
 
