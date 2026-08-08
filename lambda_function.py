@@ -46,8 +46,10 @@ IDENTITY_SECRET = os.environ.get("IDENTITY_SECRET", "")  # shared with trades-gr
 COOKIE_NAME  = "gg_session"
 SESSION_DAYS = 365
 
-# Admin gate: the one client_id allowed to invite others. Set in the Lambda env.
-ADMIN_CLIENT_ID = os.environ.get("ADMIN_CLIENT_ID", "")
+# Admin gate: the client_ids allowed to invite others. Set in the Lambda env as a
+# comma-separated list ("123" or "123,456"); blank entries and stray spaces are ignored.
+ADMIN_CLIENT_IDS = {p.strip() for p in os.environ.get("ADMIN_CLIENT_ID", "").split(",")
+                    if p.strip()}
 
 # Pipeline (PD) person page; the admin roll-up links each Client ID here (new tab).
 PD_PERSON_URL = "https://app.pipelinecrm.com/people/"
@@ -3278,8 +3280,8 @@ def lambda_handler(event, context):
     if not client_id:
         return html_response(login_required("Please open your personal portfolio link."), 401)
 
-    # Server-side admin gate: only this client_id may mint invites to any portfolio.
-    is_admin = bool(ADMIN_CLIENT_ID) and client_id == ADMIN_CLIENT_ID
+    # Server-side admin gate: only these client_ids may mint invites to any portfolio.
+    is_admin = client_id in ADMIN_CLIENT_IDS
 
     if method == "POST":
         form = _parse_body(event)
