@@ -2576,11 +2576,6 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     top = _auc_num(ranked[0].get("gross")) if ranked else None
     low = _auc_num(ranked[-1].get("gross")) if ranked else None
 
-    def stat(label, value):
-        return (f'<div class="au-stat"><div class="au-lbl">{label}</div>'
-                f'<div class="au-val">{value}</div></div>')
-
-    stats = ""
     _buyers = _wl_buyers(company) or int(auc.get("buyers") or 0)
     bid_stats = ""
     if top:
@@ -2887,7 +2882,6 @@ def render_auction(auction_id, client_id, is_admin, err=""):
 
     note = (f'<p class="au-note">{html.escape(auc.get("note") or "")}</p>'
             if auc.get("note") else "")
-    stats_block = f'<div class="au-stats">{stats}</div>' if stats.strip() else ""
 
     edit_html = ""
     if is_admin:
@@ -2924,11 +2918,6 @@ def render_auction(auction_id, client_id, is_admin, err=""):
 
     return html_response(f"""
     <style>
-      .au-stats {{ display:flex; flex-wrap:wrap; gap:26px; margin:16px 0 20px;
-                   padding:16px 18px; background:#f8f9fa; border-radius:8px; }}
-      .au-lbl {{ font-size:11px; letter-spacing:.07em; text-transform:uppercase;
-                 color:#6b7280; margin-bottom:3px; }}
-      .au-val {{ font-size:19px; font-weight:600; }}
       .au-note {{ font-style:italic; color:#6b7280; margin:0 0 16px; }}
       .au-ok {{ color:#1f7a4d; font-weight:600; }}
       .au-bad {{ color:#b45309; font-weight:600; }}
@@ -3022,7 +3011,6 @@ def render_auction(auction_id, client_id, is_admin, err=""):
       .au-bval {{ font-size:19px; font-weight:600; }}
       .au-lrlbl {{ font-size:11px; color:#6b7280; }}
       .au-lrval {{ font-size:15px; font-weight:600; }}
-      .au-cols .au-stats {{ flex-direction:column; gap:12px; margin:0 0 16px; }}
       .au-box {{ margin-top:0; }}
       .au-cols .au-side .au-box {{ background:#faf8f3; border:1px solid var(--line);
                                    font-size:13px; }}
@@ -3040,7 +3028,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     {note}
     <div class="{'au-cols' if side_panel else ''}">
       <div class="au-main">{details_html}{edit_html}{book}</div>
-      {f'<div class="au-side">{stats_block}{side_panel}</div>' if side_panel else stats_block}
+      {f'<div class="au-side">{side_panel}</div>' if side_panel else ""}
     </div>
     <script>
       function auCopy(t) {{
