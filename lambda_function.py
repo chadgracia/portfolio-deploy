@@ -2183,6 +2183,8 @@ def render_admin_hub():
          "?view=auctions", False),
         ("Client links", "Generate a sign-in link for any client, or preview their view.",
          "?view=link", False),
+        ("All portfolios", "Every client's holdings in one roll-up.",
+         "?view=portfolios", False),
         ("Trades book", "The full indications grid, with nudges and LOI requests.",
          ADMIN_TRADES_URL, True),
     ]
@@ -3421,7 +3423,7 @@ def lambda_handler(event, context):
         return render_watchlist_builder(view_id)
     if qs.get("view") == "holdings":
         return render_portfolio(load_portfolio(view_id), is_admin)
-    if qs.get("view") == "admin" and is_admin:
+    if qs.get("view") == "portfolios" and is_admin:
         return render_admin_overview(client_id)
     return render_watchlist_status(view_id, is_admin and not qs.get("as"))
 
