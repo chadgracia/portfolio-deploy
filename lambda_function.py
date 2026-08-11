@@ -43,6 +43,7 @@ from botocore.exceptions import ClientError
 BUCKET       = "gracia-portfolios"                       # per-client portfolio storage
 HMAC_SECRET  = os.environ.get("HMAC_SECRET", "change-me-in-env")  # set in Lambda env
 IDENTITY_SECRET = os.environ.get("IDENTITY_SECRET", "")  # shared with trades-gracia-web; verifies the SSO handoff
+LOI_TOKEN_SECRET = os.environ.get("LOI_TOKEN_SECRET", "")  # shared with the LOI signing lambda; signs its deal links
 COOKIE_NAME  = "gg_session"
 SESSION_DAYS = 365
 
@@ -1904,10 +1905,15 @@ def _b64u_decode(s):                # unpadded base64url str -> bytes
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
+def sign_id(secret, ident):
+    """The token shape every signed link here uses: unpadded base64url of
+    HMAC-SHA256(secret, id). Only the key differs between the sibling lambdas."""
+    return _b64u(hmac.new(secret.encode(), str(ident).encode(), hashlib.sha256).digest())
+
+
 def make_token(client_id):
     """Permanent magic-link token: HMAC over the client_id."""
-    sig = hmac.new(HMAC_SECRET.encode(), client_id.encode(), hashlib.sha256).digest()
-    return _b64u(sig)
+    return sign_id(HMAC_SECRET, client_id)
 
 
 def verify_token(client_id, token):
@@ -2282,6 +2288,115 @@ def render_client_link(base_url):
     """, is_admin=True)
 
 
+TRADE_UPDATE_BASE = "https://s5qv2qkmjt2qejliwchvqukseq0wgwff.lambda-url.us-east-1.on.aws/"
+LOI_SIGN_BASE = "https://aep54fnrcp4bxiowlw3fvt26x40qhgpn.lambda-url.us-east-1.on.aws/"
+TRADE_UPDATE_SECRET = "trade-update"   # the update form's key is fixed, not a secret
+
+
+def _deal_name(deal_id):
+    """The deal's "name" field, or "" if Pipeline doesn't know that id. Never raises:
+    a failed lookup only costs the confirmation line, not the links."""
+    try:
+        res = call_pipeline_api("GET", f"/deals/{deal_id}.json", jwt=get_jwt())
+        if res.get("status") == 200 and isinstance(res.get("data"), dict):
+            return (res["data"].get("name") or "").strip()
+    except Exception as e:
+        print(f"deal_links: deal lookup failed for {deal_id}: {e}")
+    return ""
+
+
+def render_deal_links():
+    """Admin-only: type a Pipeline deal id, get its update-request and LOI links."""
+    return html_response("""
+    <style>
+      .dl-form { display:flex; gap:8px; flex-wrap:wrap; margin:14px 0 18px; }
+      .dl-form input { padding:9px 12px; font-family:inherit; font-size:14px;
+                       border:1px solid var(--line); border-radius:6px; min-width:240px; }
+      .dl-form button { padding:9px 18px; font-family:inherit; font-size:14px;
+                        font-weight:600; border:none; border-radius:6px;
+                        background:var(--ink); color:#fff; cursor:pointer; }
+      .dl-out { display:none; margin-top:8px; }
+      .dl-block { margin-top:18px; }
+      .dl-label { font-weight:600; font-size:14px; margin-bottom:6px; }
+      .dl-url { width:100%; padding:10px 12px; font-family:ui-monospace,monospace;
+                font-size:13px; border:1px solid var(--line); border-radius:6px; }
+      .dl-row { display:flex; gap:8px; align-items:center; margin-top:8px; }
+      .dl-note { font-size:13px; color:#b45309; margin-top:8px; line-height:1.45; }
+      .dl-off .dl-url { background:#f3f4f6; color:#9ca3af; }
+      .dl-off .dl-row { display:none; }
+    </style>
+    <h1>Deal links</h1>
+    <p class="sub">Enter a Pipeline deal ID to generate its update-request and LOI signing links.</p>
+    <div class="dl-form">
+      <input id="dl-id" type="text" inputmode="numeric" placeholder="e.g. 12345678">
+      <button type="button" onclick="dlGo()">Get links</button>
+    </div>
+    <div id="dl-out" class="dl-out">
+      <div id="dl-who" style="font-weight:600; margin-bottom:6px;"></div>
+      <div class="dl-block">
+        <div class="dl-label">Update request form</div>
+        <input id="dl-update" class="dl-url" readonly onclick="this.select()">
+        <div class="dl-row">
+          <button type="button" onclick="dlCopy('dl-update')">Copy</button>
+          <a id="dl-update-open" href="#" target="_blank" rel="noopener">Open in new tab &rarr;</a>
+        </div>
+      </div>
+      <div class="dl-block" id="dl-loi-block">
+        <div class="dl-label">LOI signing link</div>
+        <input id="dl-loi" class="dl-url" readonly onclick="this.select()">
+        <div class="dl-row">
+          <button type="button" onclick="dlCopy('dl-loi')">Copy</button>
+          <a id="dl-loi-open" href="#" target="_blank" rel="noopener">Open in new tab &rarr;</a>
+        </div>
+        <div id="dl-loi-note" class="dl-note"></div>
+      </div>
+    </div>
+    <script>
+      function dlGo() {
+        var id = (document.getElementById('dl-id').value || '').trim();
+        if (!id) { return; }
+        fetch('?view=deal_link_tokens&id=' + encodeURIComponent(id))
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (!d || !d.update_url) { alert('Could not generate links.'); return; }
+            var who = document.getElementById('dl-who');
+            if (d.name) {
+              who.textContent = d.name;
+              who.style.color = '';
+            } else {
+              who.textContent = 'No deal found with that ID — check before sending.';
+              who.style.color = '#b45309';
+            }
+            document.getElementById('dl-update').value = d.update_url;
+            document.getElementById('dl-update-open').href = d.update_url;
+            // No LOI secret on this Lambda means no signature we could trust, so the
+            // row goes dead rather than handing over a link that would be rejected.
+            var block = document.getElementById('dl-loi-block');
+            var note = document.getElementById('dl-loi-note');
+            if (d.loi_url) {
+              block.classList.remove('dl-off');
+              document.getElementById('dl-loi').value = d.loi_url;
+              document.getElementById('dl-loi-open').href = d.loi_url;
+              note.textContent = '';
+            } else {
+              block.classList.add('dl-off');
+              document.getElementById('dl-loi').value = '';
+              document.getElementById('dl-loi-open').href = '#';
+              note.textContent = d.loi_error || 'LOI links are unavailable.';
+            }
+            document.getElementById('dl-out').style.display = 'block';
+          })
+          .catch(function (e) { alert('Error: ' + e); });
+      }
+      function dlCopy(elId) {
+        var el = document.getElementById(elId);
+        el.select();
+        document.execCommand('copy');
+      }
+    </script>
+    """, is_admin=True)
+
+
 AUCTIONS_KEY = "auctions.json"
 
 
@@ -2321,24 +2436,27 @@ def render_admin_hub():
     """Admin-only index of every internal tool."""
     tiles = [
         ("Daily brief", "Your queue: invoices, closes, crossed trades, warm leads.",
-         ADMIN_BRIEF_URL, True),
+         ADMIN_BRIEF_URL),
         ("Weekly mailer recipients", "First name and email for the SharePoint flow.",
-         ADMIN_MAILER_URL, True),
+         ADMIN_MAILER_URL),
         ("Third-party pricing", "Update Hiive bid, ask and mark for tracked names.",
-         ADMIN_PRICING_URL, True),
+         ADMIN_PRICING_URL),
         ("Auctions", "Create an auction, view the order book, invite buyers.",
-         "?view=auctions", False),
+         "?view=auctions"),
         ("Client links", "Generate a sign-in link for any client, or preview their view.",
-         "?view=link", False),
+         "?view=link"),
+        ("Deal links", "Generate an update-request or LOI link for any deal.",
+         "?view=deallinks"),
         ("All portfolios", "Every client's holdings in one roll-up.",
-         "?view=portfolios", False),
+         "?view=portfolios"),
         ("Trades book", "The full indications grid, with nudges and LOI requests.",
-         ADMIN_TRADES_URL, True),
+         ADMIN_TRADES_URL),
     ]
+    # Every tool opens in its own tab, so the hub stays put behind them.
     cards = ""
-    for title, desc, href, external in tiles:
-        tgt = ' target="_blank"' if external else ""
-        cards += (f'<a class="hub-card" href="{html.escape(href, quote=True)}"{tgt}>'
+    for title, desc, href in tiles:
+        cards += (f'<a class="hub-card" href="{html.escape(href, quote=True)}"'
+                  f' target="_blank" rel="noopener">'
                   f'<div class="hub-title">{html.escape(title)}</div>'
                   f'<div class="hub-desc">{html.escape(desc)}</div></a>')
     return html_response(f"""
@@ -3863,6 +3981,25 @@ def _route(event, context):
         return {"statusCode": 200,
                 "headers": {"Content-Type": "application/json"},
                 "body": json.dumps({"url": _lk_url, "name": _lk_name})}
+    if qs.get("view") == "deallinks" and is_admin:
+        return render_deal_links()
+    if qs.get("view") == "deal_link_tokens" and is_admin:
+        _dl_id = (qs.get("id") or "").strip()
+        _dl_name = _deal_name(_dl_id) if _dl_id else ""
+        _dl_q = urllib.parse.quote(_dl_id)
+        _dl_update = (f"{TRADE_UPDATE_BASE}?deal_id={_dl_q}"
+                      f"&token={sign_id(TRADE_UPDATE_SECRET, _dl_id)}") if _dl_id else ""
+        # Without the secret there is no signature to give, so the page is told to
+        # disable the row instead of being handed a link the LOI lambda would reject.
+        _dl_loi = (f"{LOI_SIGN_BASE}?deal_id={_dl_q}"
+                   f"&t={sign_id(LOI_TOKEN_SECRET, _dl_id)}") if (_dl_id and LOI_TOKEN_SECRET) else ""
+        _dl_err = "" if LOI_TOKEN_SECRET else (
+            "The LOI_TOKEN_SECRET environment variable is not set on this Lambda, "
+            "so LOI links can't be signed here.")
+        return {"statusCode": 200,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps({"name": _dl_name, "update_url": _dl_update,
+                                    "loi_url": _dl_loi, "loi_error": _dl_err})}
     if qs.get("view") == "watchlist":
         return render_watchlist_builder(view_id)
     if qs.get("view") == "holdings":
