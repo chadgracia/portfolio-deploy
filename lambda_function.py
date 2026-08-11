@@ -51,6 +51,13 @@ SESSION_DAYS = 365
 ADMIN_CLIENT_IDS = {p.strip() for p in os.environ.get("ADMIN_CLIENT_ID", "").split(",")
                     if p.strip()}
 
+# A second, independent cookie recording that THIS BROWSER belongs to an admin.
+# The session cookie says which client's data you're looking at and gets replaced
+# every time a magic link is opened; this one says who you are and survives that,
+# so opening a client's link no longer signs the admin out of their own tools.
+ADMIN_COOKIE_NAME = "gg_admin"
+ADMIN_DAYS        = 365
+
 # Pipeline (PD) person page; the admin roll-up links each Client ID here (new tab).
 PD_PERSON_URL = "https://app.pipelinecrm.com/people/"
 
@@ -269,6 +276,19 @@ def lookup_person(client_id):
     except Exception as e:
         print(f"lookup_person failed: {e}")
     return {"found": False}
+
+
+def display_name(client_id):
+    """Best-effort human name for a client id, for the "viewing as" bar. Falls back
+    to the id itself so the bar always renders. Never raises."""
+    try:
+        rec = _people_index().get("by_id", {}).get(str(client_id)) or {}
+        name = (rec.get("name") or rec.get("first_name") or "").strip()
+        if name:
+            return name
+    except Exception as e:
+        print(f"display_name failed: {e}")
+    return f"client {client_id}"
 
 
 def picker_index():
@@ -1689,6 +1709,13 @@ def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist"
     .navbtn.brand {{ color: var(--ink); }}
     .navbtn-soon {{ color: #b6b2aa; border-style: dashed; cursor: not-allowed; }}
     .navbtn-soon:hover {{ color: #b6b2aa; border-color: var(--line); }}
+    .viewbar {{
+      display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+      margin-bottom: 18px; padding: 9px 13px; border-radius: 8px;
+      border: 1px solid #e6d8ac; background: #fdf7e6;
+      font-size: 12px; font-weight: 600; color: #7a5c14;
+    }}
+    .viewbar a {{ color: #7a5c14; }}
     .legal {{
       margin-top: 44px; padding-top: 28px; border-top: 1px solid var(--line);
       font-size: 11px; line-height: 1.6; color: var(--muted);
@@ -1944,6 +1971,55 @@ def read_session(value):
         return client_id
     except Exception:
         return None
+
+
+def make_admin_cookie(admin_id):
+    """Signed, expiring admin marker:  base64url("admin"|admin_id|exp).base64url(sig).
+
+    Exactly the make_session construction — HMAC-SHA256 over the base64url payload,
+    keyed by the same HMAC_SECRET — so this cookie is no more forgeable than a
+    session is. The literal "admin" first field is domain separation: it keeps the
+    two cookie types from being swapped for one another. A session value fed to
+    read_admin_cookie fails the kind check, and an admin value fed to read_session
+    fails its int(exp) parse, even though both verify under the same key."""
+    payload = f"admin|{admin_id}|{int(time.time()) + ADMIN_DAYS * 86400}"
+    p = _b64u(payload.encode())
+    sig = hmac.new(HMAC_SECRET.encode(), p.encode(), hashlib.sha256).digest()
+    return f"{p}.{_b64u(sig)}"
+
+
+def read_admin_cookie(value):
+    """Return the admin's own client_id if the cookie is validly signed, unexpired
+    AND still listed in ADMIN_CLIENT_IDS, else None. The membership re-check means
+    removing someone from the env var revokes their stickiness immediately, instead
+    of leaving a year-long cookie standing."""
+    try:
+        p, s = (value or "").split(".", 1)
+        expected = hmac.new(HMAC_SECRET.encode(), p.encode(), hashlib.sha256).digest()
+        if not hmac.compare_digest(_b64u(expected), s):
+            return None
+        parts = _b64u_decode(p).decode().split("|")
+        if len(parts) != 3 or parts[0] != "admin":
+            return None
+        admin_id, exp = parts[1], parts[2]
+        if int(exp) < int(time.time()):
+            return None
+        return admin_id if admin_id in ADMIN_CLIENT_IDS else None
+    except Exception:
+        return None
+
+
+def _cookie(name, value, days):
+    return (f"{name}={value}; Path=/; HttpOnly; Secure; SameSite=Lax; "
+            f"Max-Age={days * 86400}")
+
+
+def session_cookie(client_id):
+    return _cookie(COOKIE_NAME, make_session(client_id), SESSION_DAYS)
+
+
+def admin_cookie(admin_id):
+    return _cookie(ADMIN_COOKIE_NAME, make_admin_cookie(admin_id), ADMIN_DAYS)
 
 
 def get_cookie(event, name):
@@ -3412,7 +3488,7 @@ def render_watchlist_status(client_id, is_admin=False):
     """, is_admin=is_admin)
 
 
-def lambda_handler(event, context):
+def _route(event, context):
     method = (event.get("requestContext", {}).get("http", {}).get("method") or "GET").upper()
     raw_path = event.get("rawPath", "/")
     qs = event.get("queryStringParameters") or {}
@@ -3420,16 +3496,20 @@ def lambda_handler(event, context):
     # 1) Magic-link arrival: verify, set session cookie, redirect to a clean URL.
     if qs.get("client") and qs.get("token"):
         if verify_token(qs["client"], qs["token"]):
-            cookie = (f"{COOKIE_NAME}={make_session(qs['client'])}; Path=/; HttpOnly; "
-                      f"Secure; SameSite=Lax; Max-Age={SESSION_DAYS * 86400}")
+            # An admin's own link additionally stamps this browser as admin. That
+            # second cookie is what later survives opening a CLIENT's magic link:
+            # the session below gets overwritten, the admin identity does not.
+            cookies = [session_cookie(qs["client"])]
+            if qs["client"] in ADMIN_CLIENT_IDS:
+                cookies.append(admin_cookie(qs["client"]))
             _dest = raw_path
             _v = (qs.get("view") or "").strip()
             if _v in ("auction", "watchlist", "holdings"):
                 _dest = raw_path + "?view=" + urllib.parse.quote(_v)
                 if qs.get("id"):
                     _dest += "&id=" + urllib.parse.quote(qs["id"])
-            return {"statusCode": 303,
-                    "headers": {"Location": _dest, "Set-Cookie": cookie}, "body": ""}
+            return {"statusCode": 303, "headers": {"Location": _dest},
+                    "cookies": cookies, "body": ""}
         return html_response(login_required("That link isn't valid."), 403)
 
     # 1b) Cross-site SSO handoff from the trading site: verify the signed email,
@@ -3446,10 +3526,11 @@ def lambda_handler(event, context):
             return html_response(login_required(
                 "We couldn't find a portfolio linked to your email yet — please "
                 "contact Chad and he'll get you set up."), 200)
-        cookie = (f"{COOKIE_NAME}={make_session(cid)}; Path=/; HttpOnly; "
-                  f"Secure; SameSite=Lax; Max-Age={SESSION_DAYS * 86400}")
-        return {"statusCode": 303,
-                "headers": {"Location": raw_path, "Set-Cookie": cookie}, "body": ""}
+        cookies = [session_cookie(cid)]
+        if cid in ADMIN_CLIENT_IDS:            # same stickiness via the SSO door
+            cookies.append(admin_cookie(cid))
+        return {"statusCode": 303, "headers": {"Location": raw_path},
+                "cookies": cookies, "body": ""}
 
     # 2) Everything else requires a valid session; scope strictly to that client.
     client_id = read_session(get_cookie(event, COOKIE_NAME))
@@ -3457,7 +3538,23 @@ def lambda_handler(event, context):
         return html_response(login_required("Please open your personal portfolio link."), 401)
 
     # Server-side admin gate: only these client_ids may mint invites to any portfolio.
-    is_admin = client_id in ADMIN_CLIENT_IDS
+    # Identity is now sticky and independent of the session: you are an admin if the
+    # session you're browsing under is an admin id, OR if this browser carries a
+    # validly signed, unexpired admin cookie. The second half is what keeps the admin
+    # routes, the Admin button and ?as= previews alive while the session cookie points
+    # at a client — opening a client's magic link changes what you see, not who you are.
+    admin_id = read_admin_cookie(get_cookie(event, ADMIN_COOKIE_NAME))
+    is_admin = client_id in ADMIN_CLIENT_IDS or bool(admin_id)
+
+    # The way back: restore the admin's own session from the sticky cookie, and
+    # re-stamp the admin cookie so it rolls forward rather than aging out.
+    if qs.get("view") == "resume_admin":
+        own = admin_id or (client_id if client_id in ADMIN_CLIENT_IDS else None)
+        if not own:
+            return html_response(login_required(
+                "This browser isn't signed in as an admin."), 403)
+        return {"statusCode": 303, "headers": {"Location": raw_path},
+                "cookies": [session_cookie(own), admin_cookie(own)], "body": ""}
 
     if method == "POST":
         form = _parse_body(event)
@@ -3773,6 +3870,38 @@ def lambda_handler(event, context):
     if qs.get("view") == "portfolios" and is_admin:
         return render_admin_overview(client_id)
     return render_watchlist_status(view_id, is_admin and not qs.get("as"))
+
+
+def _viewing_as_bar(client_id):
+    """The small 'viewing as <name> — back to admin' strip, linking to the route
+    that puts the admin's own session back."""
+    return ('<div class="viewbar">Viewing as '
+            f'<strong>{html.escape(display_name(client_id))}</strong> — '
+            '<a href="?view=resume_admin">back to admin</a></div>')
+
+
+def lambda_handler(event, context):
+    """Thin shell around _route: renders the "viewing as" bar whenever the browser
+    carries a valid admin cookie but the session cookie points at somebody else.
+    Done here, once, rather than threaded through every render_* function — the bar
+    is a property of the request, not of any particular page. Failures are swallowed:
+    a missing bar must never cost the user their page."""
+    resp = _route(event, context)
+    try:
+        admin_id = read_admin_cookie(get_cookie(event, ADMIN_COOKIE_NAME))
+        if not admin_id:
+            return resp
+        client_id = read_session(get_cookie(event, COOKIE_NAME))
+        if not client_id or client_id == admin_id:
+            return resp
+        headers = resp.get("headers") or {}
+        body = resp.get("body") or ""
+        anchor = '<div class="card">'
+        if "text/html" in headers.get("Content-Type", "") and anchor in body:
+            resp["body"] = body.replace(anchor, anchor + _viewing_as_bar(client_id), 1)
+    except Exception as e:
+        print(f"viewing-as bar skipped: {e}")
+    return resp
 
 
 # ── Local helper: seed a client's portfolio + mint their magic link ────────────────
