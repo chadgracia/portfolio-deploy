@@ -2290,6 +2290,7 @@ def render_client_link(base_url):
 
 TRADE_UPDATE_BASE = "https://s5qv2qkmjt2qejliwchvqukseq0wgwff.lambda-url.us-east-1.on.aws/"
 LOI_SIGN_BASE = "https://aep54fnrcp4bxiowlw3fvt26x40qhgpn.lambda-url.us-east-1.on.aws/"
+WEB_BID_BASE = "https://7u6sphgup5gjuywcvpuwzhruiq0asgdz.lambda-url.us-east-1.on.aws/"
 TRADE_UPDATE_SECRET = "trade-update"   # the update form's key is fixed, not a secret
 
 
@@ -2306,7 +2307,24 @@ def _deal_name(deal_id):
 
 
 def render_deal_links():
-    """Admin-only: type a Pipeline deal id, get its update-request and LOI links."""
+    """Admin-only: deal-id links (update request, LOI), plus web-bid links by company."""
+    # web-bid resolves pricing and holder counts by matching this name against
+    # Pipeline, so the picker has to offer the CRM's own casing. _company_id_by_name()
+    # lowercases its keys for joining, so read tracked_companies() directly — its
+    # values are the untouched names. A failed S3 read only costs the picker: the
+    # field stays free-text and the note below it says the name must match exactly.
+    try:
+        wb_names = sorted(set(tracked_companies().values()), key=str.lower)
+    except Exception as e:
+        print(f"deal_links: company list unavailable: {e}")
+        wb_names = []
+    wb_options = "".join(
+        f'<option value="{html.escape(n, quote=True)}"></option>' for n in wb_names)
+    wb_hint = ("Pick a tracked company, or type the name exactly as Pipeline spells it."
+               if wb_names else
+               "Type the company name exactly as Pipeline spells it — the company list "
+               "could not be loaded, and web-bid can't resolve pricing or holder counts "
+               "from a name that doesn't match.")
     return html_response("""
     <style>
       .dl-form { display:flex; gap:8px; flex-wrap:wrap; margin:14px 0 18px; }
@@ -2324,8 +2342,12 @@ def render_deal_links():
       .dl-note { font-size:13px; color:#b45309; margin-top:8px; line-height:1.45; }
       .dl-off .dl-url { background:#f3f4f6; color:#9ca3af; }
       .dl-off .dl-row { display:none; }
+      .dl-sep { border:none; border-top:1px solid var(--line); margin:34px 0 26px; }
+      .dl-h2 { font-size:20px; margin-bottom:4px; }
+      .dl-hint { font-size:13px; color:var(--muted); margin-top:-8px; }
     </style>
-    <h1>Deal links</h1>
+    <h1>Links</h1>
+    <h2 class="dl-h2">Deal links</h2>
     <p class="sub">Enter a Pipeline deal ID to generate its update-request and LOI signing links.</p>
     <div class="dl-form">
       <input id="dl-id" type="text" inputmode="numeric" placeholder="e.g. 12345678">
@@ -2350,6 +2372,36 @@ def render_deal_links():
         </div>
         <div id="dl-loi-note" class="dl-note"></div>
       </div>
+    </div>
+    <hr class="dl-sep">
+    <h2 class="dl-h2">Web-bid links</h2>
+    <p class="sub">Enter a company name to generate its buyer bid form and seller offer form links.</p>
+    <div class="dl-form">
+      <input id="wb-name" type="text" list="wb-companies" autocomplete="off"
+             placeholder="Start typing a company name">
+      <button type="button" onclick="wbGo()">Get links</button>
+    </div>
+    <datalist id="wb-companies">""" + wb_options + """</datalist>
+    <p class="dl-hint">""" + html.escape(wb_hint) + """</p>
+    <div id="wb-out" class="dl-out">
+      <div class="dl-block">
+        <div class="dl-label">Bid form (buyer)</div>
+        <input id="wb-buy" class="dl-url" readonly onclick="this.select()">
+        <div class="dl-row">
+          <button type="button" onclick="dlCopy('wb-buy')">Copy</button>
+          <a id="wb-buy-open" href="#" target="_blank" rel="noopener">Open in new tab &rarr;</a>
+        </div>
+      </div>
+      <div class="dl-block">
+        <div class="dl-label">Offer form (seller)</div>
+        <input id="wb-sell" class="dl-url" readonly onclick="this.select()">
+        <div class="dl-row">
+          <button type="button" onclick="dlCopy('wb-sell')">Copy</button>
+          <a id="wb-sell-open" href="#" target="_blank" rel="noopener">Open in new tab &rarr;</a>
+        </div>
+      </div>
+      <div class="dl-note">These links carry no token — anyone with the link can open the
+        form, and it collects name and email from anyone not already signed in.</div>
     </div>
     <script>
       function dlGo() {
@@ -2392,6 +2444,18 @@ def render_deal_links():
         var el = document.getElementById(elId);
         el.select();
         document.execCommand('copy');
+      }
+      var WB_BASE = """ + json.dumps(WEB_BID_BASE) + """;
+      // Open by design: no token to fetch, so the links are built right here.
+      function wbGo() {
+        var name = (document.getElementById('wb-name').value || '').trim();
+        if (!name) { return; }
+        var base = WB_BASE + '?name=' + encodeURIComponent(name) + '&side=';
+        document.getElementById('wb-buy').value = base + 'buy';
+        document.getElementById('wb-buy-open').href = base + 'buy';
+        document.getElementById('wb-sell').value = base + 'sell';
+        document.getElementById('wb-sell-open').href = base + 'sell';
+        document.getElementById('wb-out').style.display = 'block';
       }
     </script>
     """, is_admin=True)
@@ -2445,7 +2509,8 @@ def render_admin_hub():
          "?view=auctions"),
         ("Client links", "Generate a sign-in link for any client, or preview their view.",
          "?view=link"),
-        ("Deal links", "Generate an update-request or LOI link for any deal.",
+        ("Links", "Update-request and LOI links for any deal; bid and offer links "
+                  "for any company.",
          "?view=deallinks"),
         ("All portfolios", "Every client's holdings in one roll-up.",
          "?view=portfolios"),
