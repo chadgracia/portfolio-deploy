@@ -3130,21 +3130,28 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                             if (b.get("email") or "") == (me.get("email") or "")), None)
             _mine = _auc_num(me.get("gross")) or 0
             if my_rank == 1:
-                standing = (f'<p class="au-lead">You hold the top bid at '
+                standing = (f'<p class="au-standing au-lead">You hold the top bid at '
                             f'<strong>{_wl_pps(me.get("gross"))}</strong> '
                             f'of {len(ranked)} bid{"" if len(ranked) == 1 else "s"}.</p>')
             else:
-                standing = (f'<p class="au-bad">You have been outbid. Your bid is '
+                standing = (f'<p class="au-standing au-bad">You have been outbid. Your bid is '
                             f'{_wl_pps(me.get("gross"))}, ranked {my_rank} of {len(ranked)}. '
                             f'The top bid is {_wl_pps(top)}.</p>')
         elif ranked:
             standing = ""
         else:
-            standing = '<p class="wl-soft">No bids have been placed yet. Be the first.</p>'
+            standing = ('<p class="au-standing wl-soft">No bids have been placed yet. '
+                        'Be the first.</p>')
 
+        # Cleared is reassurance, so it sits at the foot of the bid box next to the
+        # button. Not cleared is a prompt for someone who has already bid, so it stays
+        # in the main column where it carries weight.
         cleared, iqf_url = _auction_iqf(client_id)
+        iqf_ok_html = ""
         if cleared:
-            iqf_html = '<p class="au-ok">&#10003; Investor Qualification Form on file.</p>'
+            iqf_html = ""
+            iqf_ok_html = ('<p class="au-iqfok">&#10003; We have your Investor '
+                           'Qualification Form, you are ready to proceed.</p>')
         elif me:
             iqf_html = ('<p class="au-iqf">Your bid is in. We can only present bids from '
                         'verified accredited investors, so the next step is your Investor '
@@ -3217,6 +3224,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
               </div>
             </div>
           </form>
+          {iqf_ok_html}
         </div>
         {deadline_html}
         <script>
@@ -3434,7 +3442,12 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                                    font-size:13px; }}
       .au-implied {{ color:#1f7a4d; font-size:13px; margin-bottom:8px; }}
       .au-iqf {{ background:#fdf6e7; border:1px solid #f0dfae; border-radius:6px;
-                 padding:11px 14px; margin:14px 0 0; font-size:14px; }}
+                 padding:11px 14px; margin:18px 0 0; font-size:14px; }}
+      /* The global reset zeroes p margins, so the standing line needs its own gap
+         or it runs straight into whatever follows it. */
+      .au-standing {{ margin:0 0 18px; }}
+      .au-iqfok {{ margin:14px 0 0; padding-top:12px; border-top:1px solid var(--line);
+                   font-size:12px; line-height:1.5; color:#1f7a4d; }}
       .wl-h2 {{ font-size:17px; margin:22px 0 10px; }}
       .wl-soft {{ color:#6b7280; }}
       table.auc {{ width:100%; border-collapse:collapse; font-size:14px; }}
