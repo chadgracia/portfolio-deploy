@@ -2770,6 +2770,42 @@ def _save_auction_bid(auction_id, email, name, bid):
                   ContentType="application/json")
 
 
+def _delete_auction_bid(auction_id, email):
+    """Drop one bid from the book. Alerts and every other bid are left alone.
+    Returns True only when a bid was actually removed."""
+    key = _auction_bids_key(auction_id)
+    s3 = boto3.client("s3")
+    try:
+        obj = s3.get_object(Bucket=COMPANIES_BUCKET, Key=key)
+        book = json.loads(obj["Body"].read())
+    except Exception:
+        return False
+    bids = book.get("bids") or {}
+    ekey = (email or "").strip().lower()
+    if ekey not in bids:
+        return False
+    del bids[ekey]
+    book["bids"] = bids
+    s3.put_object(Bucket=COMPANIES_BUCKET, Key=key,
+                  Body=json.dumps(book, ensure_ascii=False).encode("utf-8"),
+                  ContentType="application/json")
+    return True
+
+
+def _js_lit(s):
+    """Body of a single-quoted JS string, safe inside a double-quoted HTML attribute.
+    Everything outside a small allowlist becomes a \\uXXXX escape, so a quote or an
+    ampersand in a bidder's name can't close the attribute or start an entity."""
+    safe = " .,:;!?@#$%^*()-_+=/|[]{}"
+    out = []
+    for ch in str(s or ""):
+        if ch.isalnum() or ch in safe:
+            out.append(ch)
+        elif ord(ch) < 0x10000:
+            out.append("\\u%04x" % ord(ch))
+    return "".join(out)
+
+
 AUC_CLASS_FIELD = "custom_label_3064330"
 AUC_SHARES_FIELD = "custom_label_3070843"
 AUC_CLASS_LABELS = {5077831: "Common", 5077834: "Preferred",
@@ -2961,6 +2997,16 @@ def render_auction_invites(auction_id, base_url, err=""):
     """, eyebrow="Invite buyers", is_admin=True)
 
 
+# Why an in-place edit of the order book didn't stick. Shown above the table.
+AUC_BOOK_ERRS = {
+    "bidedit": "That change wasn't saved &mdash; a bid needs a price greater than 0.",
+    "bidstale": "That bid changed somewhere else while this page was open, so nothing "
+                "was written. The book below is current &mdash; make the change again.",
+    "bidgone": "That bid is no longer in the book &mdash; it may have just been removed.",
+    "bidsave": "That change could not be written to the bid book. Please try again.",
+}
+
+
 def render_auction(auction_id, client_id, is_admin, err=""):
     auc = (_load_auctions() or {}).get(str(auction_id))
     if not auc:
@@ -3087,7 +3133,18 @@ def render_auction(auction_id, client_id, is_admin, err=""):
 
     side_panel = ""
     if is_admin:
+        # The book is editable in place: clients call and text with new numbers, and
+        # an admin needs to move a bid without impersonating the bidder. Each row's
+        # inputs live in the cells but belong to a form further down the page (the
+        # HTML5 form= attribute), because a <form> can't legally wrap a row's cells.
+        _aid_q = html.escape(str(auction_id), quote=True)
+
+        def _amt(v):
+            n = _auc_num(v)
+            return f"{int(n):,}" if n else ""
+
         rows = ""
+        row_forms = ""
         demand = 0.0
         for i, b in enumerate(ranked, 1):
             mx = _auc_num(b.get("max_size")) or 0
@@ -3098,32 +3155,89 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                 cleared = False
             iqf_cell = ('<span class="au-ok">&#10003;</span>' if cleared
                         else '<span class="au-bad">&#10007;</span>')
-            funded = (b.get("cash_on_hand") or "yes") == "yes"
-            fund_cell = "Funded" if funded else '<span class="au-bad">Syndicating</span>'
+            _bmail = (b.get("email") or "")
+            _bname = (b.get("name") or "")
+            _fid = f"aubid{i}"
+            _coh = (b.get("cash_on_hand") or "")
+            _gross = _auc_num(b.get("gross"))
+            _gross_s = f"{_gross:,.2f}" if _gross is not None else ""
+            _sel = ('' if _coh in ("yes", "no") else ' selected',
+                    ' selected' if _coh == "yes" else '',
+                    ' selected' if _coh == "no" else '')
             rows += (
                 "<tr>"
                 f"<td>{i}</td>"
-                f'<td>{html.escape(b.get("name") or "")}</td>'
-                f'<td>{html.escape(b.get("email") or "")}</td>'
-                f'<td><strong>{_wl_pps(b.get("gross"))}</strong></td>'
-                f'<td>{_wl_money(b.get("min_size"))} &ndash; {_wl_money(b.get("max_size"))}</td>'
-                f'<td>{iqf_cell}</td>'
-                f'<td>{fund_cell}</td>'
-                f'<td class="wl-soft">{html.escape(b.get("note") or "")}</td>'
+                f'<td>{html.escape(_bname)}</td>'
+                f'<td>{html.escape(_bmail)}</td>'
+                f'<td><input class="au-rin au-rprice" form="{_fid}" name="gross"'
+                f' type="text" inputmode="decimal" aria-label="Bid per share"'
+                f' value="{html.escape(_gross_s, quote=True)}"></td>'
+                f'<td class="au-rsize">'
+                f'<input class="au-rin" form="{_fid}" name="min_size" type="text"'
+                f' inputmode="numeric" aria-label="Min size"'
+                f' value="{_amt(b.get("min_size"))}">'
+                '<span class="au-rdash">&ndash;</span>'
+                f'<input class="au-rin" form="{_fid}" name="max_size" type="text"'
+                f' inputmode="numeric" aria-label="Max size"'
+                f' value="{_amt(b.get("max_size"))}">'
+                "</td>"
+                f"<td>{iqf_cell}</td>"
+                f'<td><select class="au-rin{" au-bad" if _coh == "no" else ""}"'
+                f' form="{_fid}" name="cash_on_hand" aria-label="Cash on hand">'
+                f'<option value=""{_sel[0]}>&mdash;</option>'
+                f'<option value="yes"{_sel[1]}>Funded</option>'
+                f'<option value="no"{_sel[2]}>Syndicating</option>'
+                "</select></td>"
+                f'<td><input class="au-rin" form="{_fid}" name="note" type="text"'
+                f' aria-label="Note" value="{html.escape(b.get("note") or "", quote=True)}">'
+                "</td>"
                 f'<td>{html.escape((b.get("updated_at") or "")[:10])}</td>'
+                f'<td class="au-racts">'
+                f'<button class="au-rsave" type="submit" form="{_fid}">Save</button>'
+                f'<button class="au-rdel" type="submit" form="{_fid}x">Remove</button>'
+                "</td>"
                 "</tr>"
             )
+            # prev_updated_at is the optimistic-concurrency check: the save is
+            # refused if this bid moved after the page was drawn.
+            _who = _js_lit(_bname or _bmail or "this bidder")
+            row_forms += (
+                f'<form id="{_fid}" method="POST"'
+                f' action="?view=auction&amp;id={_aid_q}">'
+                '<input type="hidden" name="action" value="auction_bid_edit">'
+                f'<input type="hidden" name="auction_id" value="{_aid_q}">'
+                f'<input type="hidden" name="email"'
+                f' value="{html.escape(_bmail, quote=True)}">'
+                f'<input type="hidden" name="prev_updated_at"'
+                f' value="{html.escape(b.get("updated_at") or "", quote=True)}">'
+                "</form>"
+                f'<form id="{_fid}x" method="POST"'
+                f' action="?view=auction&amp;id={_aid_q}"'
+                f" onsubmit=\"return confirm('Remove the bid from {_who}?"
+                f" This deletes it from the book and cannot be undone.')\">"
+                '<input type="hidden" name="action" value="auction_bid_remove">'
+                f'<input type="hidden" name="auction_id" value="{_aid_q}">'
+                f'<input type="hidden" name="email"'
+                f' value="{html.escape(_bmail, quote=True)}">'
+                "</form>"
+            )
         if not rows:
-            rows = '<tr><td colspan="9" class="wl-soft">No bids yet.</td></tr>'
+            rows = '<tr><td colspan="10" class="wl-soft">No bids yet.</td></tr>'
         dem_line = (f'<p class="wl-soft">Total demand at max size: '
                     f'<strong>{_wl_money(demand)}</strong> across {len(ranked)} '
                     f'bid{"" if len(ranked) == 1 else "s"}.</p>') if ranked else ""
+        edit_hint = ('<p class="wl-soft au-bookhint">Price, size, funding and notes are '
+                     'editable here &mdash; Save writes the change back to the bid book '
+                     'and re-ranks it.</p>') if ranked else ""
+        err_line = (f'<p class="au-bad au-bookerr">{AUC_BOOK_ERRS[err]}</p>'
+                    if err in AUC_BOOK_ERRS else "")
         book = ('<h2 class="wl-h2">Order book</h2>'
-                + dem_line +
+                + err_line + dem_line + edit_hint +
                 '<table class="auc"><thead><tr><th>#</th><th>Name</th><th>Email</th>'
-                '<th>Bid</th><th>Size</th><th>IQF</th><th>Funding</th><th>Notes</th>'
-                '<th>Updated</th></tr></thead>'
-                f'<tbody>{rows}</tbody></table>')
+                '<th>Bid ($/sh)</th><th>Size ($)</th><th>IQF</th><th>Funding</th>'
+                '<th>Notes</th><th>Updated</th><th></th></tr></thead>'
+                f'<tbody>{rows}</tbody></table>'
+                f'<div class="au-rowforms">{row_forms}</div>')
     else:
         if me:
             my_rank = next((i for i, b in enumerate(ranked, 1)
@@ -3454,6 +3568,26 @@ def render_auction(auction_id, client_id, is_admin, err=""):
       table.auc th, table.auc td {{ border:1px solid #ddd; padding:10px 12px;
                                     text-align:left; }}
       table.auc th {{ font-size:12px; letter-spacing:.06em; text-transform:uppercase; }}
+      /* Editable order book. Cells hold the inputs; the forms they post through sit
+         in .au-rowforms below the table, so nothing here changes the row layout. */
+      table.auc td:has(.au-rin) {{ padding:6px 8px; vertical-align:middle; }}
+      .au-rin {{ width:100%; box-sizing:border-box; padding:6px 8px; font-family:inherit;
+                 font-size:13px; border:1px solid var(--line); border-radius:4px;
+                 background:#fff; color:inherit; }}
+      .au-rprice {{ font-weight:600; }}
+      .au-rsize {{ white-space:nowrap; min-width:170px; }}
+      .au-rsize .au-rin {{ width:calc(50% - 10px); display:inline-block; }}
+      .au-rdash {{ color:#6b7280; padding:0 3px; }}
+      .au-racts {{ white-space:nowrap; }}
+      .au-rsave {{ padding:6px 12px; font-family:inherit; font-size:12px; font-weight:600;
+                   border:none; border-radius:4px; background:var(--ink); color:#fff;
+                   cursor:pointer; }}
+      .au-rdel {{ margin-left:6px; padding:6px 10px; font-family:inherit; font-size:12px;
+                  border:1px solid var(--line); border-radius:4px; background:#fff;
+                  color:#b91c1c; cursor:pointer; }}
+      .au-rowforms {{ display:none; }}
+      .au-bookhint {{ font-size:13px; margin:0 0 10px; }}
+      .au-bookerr {{ margin:0 0 10px; }}
     </style>
     {header_html}
     {note}
@@ -3865,6 +3999,78 @@ def _route(event, context):
             if is_admin and qs.get("as"):
                 _back += "&as=" + urllib.parse.quote(qs["as"])
             return {"statusCode": 303, "headers": {"Location": _back}, "body": ""}
+
+        # In-place edits to the order book. Admin only, POST only: a non-admin is
+        # refused here rather than falling through to another action, because these
+        # rewrite another person's bid.
+        if action == "auction_bid_edit":
+            if not is_admin:
+                return {"statusCode": 403,
+                        "headers": {"Content-Type": "text/plain"},
+                        "body": "forbidden"}
+            _be_id = (form.get("auction_id") or "").strip()
+            _be_email = (form.get("email") or "").strip().lower()
+            _be_back = raw_path + "?view=auction&id=" + urllib.parse.quote(_be_id)
+
+            def _be_bounce(code=""):
+                return {"statusCode": 303,
+                        "headers": {"Location": _be_back + ("&err=" + code if code else "")},
+                        "body": ""}
+
+            if not (_be_id and _be_email):
+                return _be_bounce("bidedit")
+            _be_gross = _auc_num(form.get("gross"))
+            if _be_gross is None or _be_gross <= 0:
+                return _be_bounce("bidedit")
+            _be_cur = (_load_auction_bids(_be_id) or {}).get(_be_email)
+            if not _be_cur:
+                return _be_bounce("bidgone")
+            # Optimistic concurrency: the row carried the updated_at it was drawn
+            # with. If the bidder (or another admin) has moved this bid since, the
+            # edit is refused rather than silently overwriting the newer number.
+            _be_seen = (form.get("prev_updated_at") or "").strip()
+            if _be_seen and (_be_cur.get("updated_at") or "") != _be_seen:
+                return _be_bounce("bidstale")
+            # Start from the stored record so person_id, first_seen, any IQF keys
+            # and anything else on it survive an edit that never saw those fields.
+            _be_rec = dict(_be_cur)
+            _be_rec["gross"] = _be_gross
+            _be_rec["min_size"] = _auc_num(form.get("min_size"))
+            _be_rec["max_size"] = _auc_num(form.get("max_size"))
+            _be_rec["note"] = (form.get("note") or "").strip()
+            _be_coh = (form.get("cash_on_hand") or "").strip().lower()
+            if _be_coh in ("yes", "no"):
+                _be_rec["cash_on_hand"] = _be_coh
+            else:
+                _be_rec.pop("cash_on_hand", None)     # blank stays blank
+            try:
+                # Same path a client-submitted bid takes, so updated_at and
+                # revisions move exactly as they would on a self-service change.
+                _save_auction_bid(_be_id, _be_email, _be_rec.get("name") or "", _be_rec)
+            except Exception as e:
+                print(f"auction_bid_edit: save failed: {e}")
+                return _be_bounce("bidsave")
+            return _be_bounce()
+
+        if action == "auction_bid_remove":
+            if not is_admin:
+                return {"statusCode": 403,
+                        "headers": {"Content-Type": "text/plain"},
+                        "body": "forbidden"}
+            _br_id = (form.get("auction_id") or "").strip()
+            _br_email = (form.get("email") or "").strip().lower()
+            _br_err = ""
+            if _br_id and _br_email:
+                try:
+                    if not _delete_auction_bid(_br_id, _br_email):
+                        _br_err = "bidgone"
+                except Exception as e:
+                    print(f"auction_bid_remove: delete failed: {e}")
+                    _br_err = "bidsave"
+            _br_back = raw_path + "?view=auction&id=" + urllib.parse.quote(_br_id)
+            if _br_err:
+                _br_back += "&err=" + _br_err
+            return {"statusCode": 303, "headers": {"Location": _br_back}, "body": ""}
 
         if action == "interest_refresh":
             if not is_admin:
