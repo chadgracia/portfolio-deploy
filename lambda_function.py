@@ -3667,6 +3667,12 @@ def render_watchlist_status(client_id, is_admin=False):
     def block(side, names):
         want_type = "Sell Order" if side == "buy" else "Buy Order"
         label = "Companies you're looking to buy" if side == "buy" else "Companies you're looking to sell"
+        # Public companies ride in the same two interest fields as the private names,
+        # marked with a "$" in the security name (e.g. "xAI$"). Nothing on this page
+        # applies to them — there is no private deal to view and no bid to submit — so
+        # they are dropped here, at render time only. The person's stored watchlist is
+        # untouched, and so are the matching and holder counts computed above.
+        names = [n for n in names if "$" not in (n or "")]
         if not names:
             return ""
 
