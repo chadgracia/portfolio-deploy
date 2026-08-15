@@ -3782,9 +3782,24 @@ def render_watchlist_status(client_id, is_admin=False):
                 'Use &times; to remove a company from your watchlist.</p>')
 
     body = block("buy", sides["buy"]) + block("sell", sides["sell"])
-    if not body:
-        body = ('<p class="wl-soft">Your watchlist is empty. Use <strong>Update watchlist</strong> '
-                'to choose the companies you want to follow.</p>')
+    # Adding a company lives behind the "Update watchlist" nav button, which clients
+    # read straight past — the page explains how to remove a name but never how to add
+    # one. So the foot of the page asks for it in words and offers the same route as a
+    # button. Once for the whole page, not once per block: the two tables sit directly
+    # above it, and repeating the prompt under each would only dilute it.
+    if body:
+        body += ('<div class="wl-add"><span>Want to follow more companies?</span>'
+                 '<a class="btn-secondary" href="?view=watchlist">Update your watchlist</a>'
+                 '</div>')
+    else:
+        # Nothing to remove and nothing to read: an empty watchlist is the one page
+        # whose only useful action is this one, so it carries the button on its own.
+        body = ('<p class="empty-state">Your watchlist is empty. Choose the companies you '
+                "want to follow and we'll show you live bids, offers and pricing for "
+                'each of them.</p>'
+                '<div class="wl-add">'
+                '<a class="btn-secondary" href="?view=watchlist">+ Build your watchlist</a>'
+                '</div>')
 
     return html_response(f"""
     <style>
@@ -3809,6 +3824,10 @@ def render_watchlist_status(client_id, is_admin=False):
       .wl-rm {{ border: none; background: none; color: #b6b2aa; font-size: 17px;
                 line-height: 1; cursor: pointer; padding: 0 2px; flex: 0 0 auto; }}
       .wl-rm:hover {{ color: #b45309; }}
+      /* The add prompt: sits below the tables, reads at body size rather than as the
+         12px fine print the remove hint uses, and wraps to two lines on a phone. */
+      .wl-add {{ display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+                 margin-top: 22px; font-size: 14px; color: var(--ink); }}
     </style>
     <script>
       document.addEventListener("DOMContentLoaded", function () {{
