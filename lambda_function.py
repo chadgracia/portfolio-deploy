@@ -1571,7 +1571,8 @@ def render_watchlist_builder(client_id):
     body = f"""
     <h1>Build your watchlist</h1>
     <p class="subtitle">Pick the companies you're interested in — this updates your buy/sell
-    indications and your private watchlist in one step.</p>
+    indications and your private watchlist in one step. Ticking a company adds it;
+    unticking one removes it when you save.</p>
     <p class="wl-back"><a class="cname" href="?">&larr; Back to portfolio</a></p>
 
     <form method="post" class="wl-form">
@@ -1617,8 +1618,13 @@ def render_watchlist_builder(client_id):
         </span>
       </label>
 
+      <p class="wl-save-note">Saving sets your list for the <strong>Buy</strong> or
+      <strong>Sell</strong> side selected above: the companies ticked there are kept and
+      anything unticked is removed. The other side is left alone, so change one side,
+      save, then switch and save again.</p>
+
       <div class="add-actions">
-        <button type="submit" class="btn-primary">Add to Watchlist</button>
+        <button type="submit" class="btn-primary">Update watchlist</button>
         <button type="button" class="navbtn wl-cancel">Cancel</button>
       </div>
     </form>"""
@@ -1776,6 +1782,10 @@ def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist"
     .wl-search {{ flex: 1; padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }}
     .wl-showall {{ border: 1px solid var(--line); background: #fff; color: var(--muted); border-radius: 8px; padding: 7px 12px; font-size: 12px; cursor: pointer; white-space: nowrap; }}
     .wl-hint {{ font-size: 12px; color: var(--muted); margin: 0 0 8px; }}
+    /* What the save button will do, next to the button that does it. Body size, not
+       the 12px of .wl-hint: unticking removes a company, which is not fine print. */
+    .wl-save-note {{ font-size: 14px; color: var(--ink); line-height: 1.5;
+                     margin: 26px 0 14px; max-width: 60ch; }}
     /* Structure + Fees side by side on one line */
     .wl-pref-row {{ display: flex; flex-wrap: wrap; gap: 16px 48px; }}
     .wl-pref {{ flex: 1 1 auto; }}
