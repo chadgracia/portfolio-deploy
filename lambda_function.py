@@ -2308,7 +2308,7 @@ def render_send_link():
 
     <section class="sl-sec">
       <div class="sl-head"><span class="sl-num">1</span>
-        <h2 class="sl-h2">Client sign-in link</h2></div>
+        <h2 class="sl-h2">Watchlist Link</h2></div>
       <p class="sl-who">Takes a Pipeline <strong>person ID</strong> and returns that
         client's permanent link into their own watchlist — for that one client only.</p>
       <div class="sl-note">This link signs whoever opens it in as that client, so it
