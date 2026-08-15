@@ -2509,7 +2509,8 @@ def _auc_num(v):
 ADMIN_BRIEF_URL = "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?key=alkj%2A707q235-qjdf"
 ADMIN_MAILER_URL = ADMIN_BRIEF_URL + "&view=mailer"
 ADMIN_PRICING_URL = "https://jw2kk4a73jbft32yf5lr7u22bm0bgkiy.lambda-url.us-east-1.on.aws/"
-ADMIN_ALERTS_URL = "https://3m3tx5bqrdvddzsyjitnjiipjy0hftoe.lambda-url.us-east-1.on.aws/"
+ADMIN_ALERTS_URL = ("https://3m3tx5bqrdvddzsyjitnjiipjy0hftoe.lambda-url.us-east-1.on.aws/"
+                    "?key=JK8h5Pq2L9aZ7rT3mN6bX")
 
 
 def render_admin_hub():
