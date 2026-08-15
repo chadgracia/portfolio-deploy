@@ -2501,7 +2501,7 @@ def _auc_num(v):
 ADMIN_BRIEF_URL = "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?key=alkj%2A707q235-qjdf"
 ADMIN_MAILER_URL = ADMIN_BRIEF_URL + "&view=mailer"
 ADMIN_PRICING_URL = "https://jw2kk4a73jbft32yf5lr7u22bm0bgkiy.lambda-url.us-east-1.on.aws/"
-ADMIN_TRADES_URL = "https://trades.graciagroup.com/"
+ADMIN_ALERTS_URL = "https://3m3tx5bqrdvddzsyjitnjiipjy0hftoe.lambda-url.us-east-1.on.aws/"
 
 
 def render_admin_hub():
@@ -2520,8 +2520,9 @@ def render_admin_hub():
          "?view=sendlink"),
         ("All portfolios", "Every client's holdings in one roll-up.",
          "?view=portfolios"),
-        ("Trades book", "The full indications grid, with nudges and LOI requests.",
-         ADMIN_TRADES_URL),
+        ("Deal alerts", "Active deals with live counterparty match counts, and a "
+                        "button to alert them.",
+         ADMIN_ALERTS_URL),
     ]
     # Every tool opens in its own tab, so the hub stays put behind them.
     cards = ""
