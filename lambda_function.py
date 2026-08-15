@@ -1484,16 +1484,16 @@ WL_SCRIPT = """<script>
     document.body.appendChild(ov);
   });
 
-  // Cancel: confirm before discarding, then announce the return to Holdings.
+  // Cancel: confirm before discarding, then announce the return to the watchlist.
   var cancel = document.querySelector('.wl-cancel');
   if (cancel) cancel.addEventListener('click', function () {
     var ov = document.createElement('div');
     ov.className = 'working-overlay';
     ov.innerHTML = '<div class="working-box wl-modal">'
-      + '<p class="wl-modal-h">Returning to Holdings</p>'
+      + '<p class="wl-modal-h">Returning to your watchlist</p>'
       + '<p class="wl-modal-sub">Any picks you have not added yet will not be kept.</p>'
       + '<div class="wl-modal-acts">'
-      + '<button type="button" class="btn-primary" id="wl-go">Return to Holdings</button>'
+      + '<button type="button" class="btn-primary" id="wl-go">Return to watchlist</button>'
       + '<button type="button" class="navbtn" id="wl-stay">Keep editing</button>'
       + '</div></div>';
     document.body.appendChild(ov);
@@ -1553,6 +1553,11 @@ def render_watchlist_builder(client_id):
                     'Please try again shortly.</p>')
         chips_html = "".join(rows)
         return (
+            # Proof that this side's grid rendered its full option set. The save writes
+            # a side only when its marker comes back, so a side whose options failed to
+            # load (the branch above) posts nothing and is left alone, rather than being
+            # replaced with the empty set the missing checkboxes would look like.
+            f'<input type="hidden" name="grid_side" value="{side}">'
             f'<div class="wl-tools">'
             f'<input type="text" class="wl-search" data-side="{side}" autocomplete="off" '
             f'placeholder="Search all companies…">'
@@ -1573,7 +1578,7 @@ def render_watchlist_builder(client_id):
     <p class="subtitle">Pick the companies you're interested in — this updates your buy/sell
     indications and your private watchlist in one step. Ticking a company adds it;
     unticking one removes it when you save.</p>
-    <p class="wl-back"><a class="cname" href="?">&larr; Back to portfolio</a></p>
+    <p class="wl-back"><a class="cname" href="?">&larr; Back to watchlist</a></p>
 
     <form method="post" class="wl-form">
       <input type="hidden" name="action" value="watchlist_save">
@@ -1618,10 +1623,9 @@ def render_watchlist_builder(client_id):
         </span>
       </label>
 
-      <p class="wl-save-note">Saving sets your list for the <strong>Buy</strong> or
-      <strong>Sell</strong> side selected above: the companies ticked there are kept and
-      anything unticked is removed. The other side is left alone, so change one side,
-      save, then switch and save again.</p>
+      <p class="wl-save-note">Saving updates both your <strong>Buy</strong> and
+      <strong>Sell</strong> lists: the companies ticked in each are kept, and anything
+      unticked is removed.</p>
 
       <div class="add-actions">
         <button type="submit" class="btn-primary">Update watchlist</button>
@@ -4261,16 +4265,37 @@ def _route(event, context):
                 return {"statusCode": 303,
                         "headers": {"Location": raw_path + "?view=watchlist"}, "body": ""}
             multi = _parse_body_multi(event)
-            side = form.get("side") if form.get("side") in ("buy", "sell") else "buy"
-            keep = [int(v) for v in multi.get(f"keep_{side}", [])
-                    if v.strip().lstrip("-").isdigit()]
             structures = [s for s in multi.get("structure", []) if s in WL_STRUCTURES]
             fees = [f for f in multi.get("fee", []) if f in WL_FEES]
             notify = form.get("notify") == "yes"
+            # Both grids live in one form and both post, so both are saved: the Buy/Sell
+            # radio only chooses which grid is on screen, and editing the other side then
+            # switching back used to discard those edits silently.
+            #
+            # Which sides to write is decided by the grid_side markers, NOT by which
+            # keep_* keys arrived. An unticked checkbox posts nothing, so an empty
+            # keep_<side> is ambiguous: it means "the client cleared this side" when the
+            # grid rendered, and "there was nothing to tick" when that side's options
+            # failed to load — load_security_maps fetches the two dropdowns separately
+            # and caches a partial result, so one side can come back empty while the
+            # other is fine. Replacing on the second reading would wipe a good list.
+            # The marker is emitted only by a grid that rendered, which tells the two
+            # apart and keeps clearing a side by unticking everything working.
+            sides = [s for s in ("buy", "sell") if s in multi.get("grid_side", [])]
+            # A page cached before the markers existed posts none; fall back to the old
+            # single-side behaviour rather than guessing at both.
+            if not sides:
+                sides = [form.get("side") if form.get("side") in ("buy", "sell") else "buy"]
             own = load_portfolio(client_id)
             own.setdefault("client_id", client_id)
-            save_watchlist_selection(own, client_id, side, keep, structures, fees,
-                                     notify, jwt, mode="replace")
+            for _side in sides:
+                keep = [int(v) for v in multi.get(f"keep_{_side}", [])
+                        if v.strip().lstrip("-").isdigit()]
+                # notify rides on every call: it is the same Broadcast value written to
+                # the same field, so a repeat is a no-op, and it still lands if the first
+                # side's write is the one that fails.
+                save_watchlist_selection(own, client_id, _side, keep, structures, fees,
+                                         notify, jwt, mode="replace")
             save_portfolio(own)
             return {"statusCode": 303, "headers": {"Location": raw_path}, "body": ""}
         if action == "remove":
