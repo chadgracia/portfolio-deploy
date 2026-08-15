@@ -47,6 +47,14 @@ LOI_TOKEN_SECRET = os.environ.get("LOI_TOKEN_SECRET", "")  # shared with the LOI
 COOKIE_NAME  = "gg_session"
 SESSION_DAYS = 365
 
+# The public front door. CloudFront serves this name and routes to the same set of
+# Lambdas on a path prefix (/bid/, /update/, /loi/, /deal/), so every link handed to
+# a client is built from here rather than from a raw Function URL — including the
+# self-referencing ones, which would otherwise inherit whichever host the admin who
+# generated them happened to be browsing. The trailing slash on each prefix is load-
+# bearing: the behaviours match /bid/* , so /bid?name=... would miss them.
+DESK_URL = "https://desk.graciagroup.com"
+
 # Admin gate: the client_ids allowed to invite others. Set in the Lambda env as a
 # comma-separated list ("123" or "123,456"); blank entries and stray spaces are ignored.
 ADMIN_CLIENT_IDS = {p.strip() for p in os.environ.get("ADMIN_CLIENT_ID", "").split(",")
@@ -2131,8 +2139,8 @@ def _wl_ticket_range(cf):
         hi = None
     return lo, hi
 WL_HOLDERS_KEY = "holder_counts.json"
-WL_WEBBID_URL = "https://7u6sphgup5gjuywcvpuwzhruiq0asgdz.lambda-url.us-east-1.on.aws/"
-WL_DEAL_URL = "https://ewjul4gl75iopu3yfgxfbmvyoq0tlmqf.lambda-url.us-east-1.on.aws/"
+WL_WEBBID_URL = DESK_URL + "/bid/"
+WL_DEAL_URL = DESK_URL + "/deal/"
 
 
 def _wl_json(bucket, key, default):
@@ -2222,9 +2230,9 @@ def _wl_company_meta(names, jwt):
     return out
 
 
-TRADE_UPDATE_BASE = "https://s5qv2qkmjt2qejliwchvqukseq0wgwff.lambda-url.us-east-1.on.aws/"
-LOI_SIGN_BASE = "https://aep54fnrcp4bxiowlw3fvt26x40qhgpn.lambda-url.us-east-1.on.aws/"
-WEB_BID_BASE = "https://7u6sphgup5gjuywcvpuwzhruiq0asgdz.lambda-url.us-east-1.on.aws/"
+TRADE_UPDATE_BASE = DESK_URL + "/update/"
+LOI_SIGN_BASE = DESK_URL + "/loi/"
+WEB_BID_BASE = DESK_URL + "/bid/"
 TRADE_UPDATE_SECRET = "trade-update"   # the update form's key is fixed, not a secret
 
 
@@ -3930,8 +3938,7 @@ def _route(event, context):
                         "body": json.dumps({"ok": False, "error": "forbidden"})}
             target_id = form.get("target_id", "")
             email = form.get("email", "")
-            base_url = "https://" + event["requestContext"]["domainName"]
-            send_invite(target_id, email, form.get("first_name", ""), base_url)
+            send_invite(target_id, email, form.get("first_name", ""), DESK_URL)
             # Stamp the client's portfolio so a later lookup can warn on resend.
             invited = load_portfolio(target_id)
             invited["invited_at"] = datetime.now(timezone.utc).isoformat()
@@ -3977,9 +3984,8 @@ def _route(event, context):
                 except Exception as e:
                     print(f"auction_bid: save failed: {e}")
                 try:
-                    _bu = "https://" + event["requestContext"]["domainName"]
                     _auction_bid_notifications(_aid, _email, _name, _gross,
-                                               _prior_top, _bu)
+                                               _prior_top, DESK_URL)
                 except Exception as e:
                     print(f"auction_bid: notifications failed: {e}")
             _back = raw_path + "?view=auction&id=" + urllib.parse.quote(_aid)
@@ -4245,9 +4251,7 @@ def _route(event, context):
 
     view_id = qs["as"] if (is_admin and qs.get("as")) else client_id
     if qs.get("view") == "invites" and qs.get("id") and is_admin:
-        return render_auction_invites(qs["id"],
-                                      "https://" + event["requestContext"]["domainName"],
-                                      qs.get("err") or "")
+        return render_auction_invites(qs["id"], DESK_URL, qs.get("err") or "")
     if qs.get("view") == "auction" and qs.get("id"):
         return render_auction(qs["id"], view_id, is_admin and not qs.get("as"),
                               qs.get("err") or "")
@@ -4264,7 +4268,6 @@ def _route(event, context):
                 "headers": {"Location": raw_path + "?view=sendlink"}, "body": ""}
     if qs.get("view") == "link_token" and is_admin:
         _lk_id = (qs.get("id") or "").strip()
-        _lk_base = "https://" + event["requestContext"]["domainName"]
         _lk_name = ""
         if _lk_id:
             try:
@@ -4272,7 +4275,7 @@ def _route(event, context):
                 _lk_name = (_lk_rec.get("name") or _lk_rec.get("first_name") or "").strip()
             except Exception as e:
                 print(f"link_token: people index lookup failed: {e}")
-        _lk_url = (f"{_lk_base}/?client={urllib.parse.quote(_lk_id)}"
+        _lk_url = (f"{DESK_URL}/?client={urllib.parse.quote(_lk_id)}"
                    f"&token={make_token(_lk_id)}") if _lk_id else ""
         return {"statusCode": 200,
                 "headers": {"Content-Type": "application/json"},
