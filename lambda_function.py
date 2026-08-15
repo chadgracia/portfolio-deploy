@@ -2222,72 +2222,6 @@ def _wl_company_meta(names, jwt):
     return out
 
 
-def render_client_link(base_url):
-    """Admin-only: type a Pipeline person id, get that client's magic link."""
-    return html_response(f"""
-    <style>
-      .lk-form {{ display:flex; gap:8px; flex-wrap:wrap; margin:14px 0 18px; }}
-      .lk-form input {{ padding:9px 12px; font-family:inherit; font-size:14px;
-                        border:1px solid var(--line); border-radius:6px; min-width:240px; }}
-      .lk-form button {{ padding:9px 18px; font-family:inherit; font-size:14px;
-                         font-weight:600; border:none; border-radius:6px;
-                         background:var(--ink); color:#fff; cursor:pointer; }}
-      .lk-out {{ display:none; margin-top:8px; }}
-      .lk-url {{ width:100%; padding:10px 12px; font-family:ui-monospace,monospace;
-                 font-size:13px; border:1px solid var(--line); border-radius:6px; }}
-      .lk-row {{ display:flex; gap:8px; align-items:center; margin-top:8px; }}
-    </style>
-    <h1>Client link</h1>
-    <p class="sub">Enter a Pipeline person ID to generate that client's permanent watchlist link.</p>
-    <div class="lk-form">
-      <input id="lk-id" type="text" inputmode="numeric" placeholder="e.g. 1309687264">
-      <button type="button" onclick="lkGo()">Get their link</button>
-      <button type="button" onclick="lkView()">View as them</button>
-    </div>
-    <div id="lk-out" class="lk-out">
-      <div id="lk-who" style="font-weight:600; margin-bottom:6px;"></div>
-      <input id="lk-url" class="lk-url" readonly onclick="this.select()">
-      <div class="lk-row">
-        <button type="button" onclick="lkCopy()">Copy</button>
-        <a id="lk-open" href="#" target="_blank">Open in new tab &rarr;</a>
-      </div>
-    </div>
-    <script>
-      function lkGo() {{
-        var id = (document.getElementById('lk-id').value || '').trim();
-        if (!id) {{ return; }}
-        fetch('?view=link_token&id=' + encodeURIComponent(id))
-          .then(function (r) {{ return r.json(); }})
-          .then(function (d) {{
-            if (!d || !d.url) {{ alert('Could not generate a link.'); return; }}
-            document.getElementById('lk-url').value = d.url;
-            document.getElementById('lk-open').href = d.url;
-            var who = document.getElementById('lk-who');
-            if (d.name) {{
-              who.textContent = 'Link for ' + d.name;
-              who.style.color = '';
-            }} else {{
-              who.textContent = 'No person found with that ID — check before sending.';
-              who.style.color = '#b45309';
-            }}
-            document.getElementById('lk-out').style.display = 'block';
-          }})
-          .catch(function (e) {{ alert('Error: ' + e); }});
-      }}
-      function lkView() {{
-        var id = (document.getElementById('lk-id').value || '').trim();
-        if (!id) {{ return; }}
-        window.open('?as=' + encodeURIComponent(id), '_blank');
-      }}
-      function lkCopy() {{
-        var el = document.getElementById('lk-url');
-        el.select();
-        document.execCommand('copy');
-      }}
-    </script>
-    """, is_admin=True)
-
-
 TRADE_UPDATE_BASE = "https://s5qv2qkmjt2qejliwchvqukseq0wgwff.lambda-url.us-east-1.on.aws/"
 LOI_SIGN_BASE = "https://aep54fnrcp4bxiowlw3fvt26x40qhgpn.lambda-url.us-east-1.on.aws/"
 WEB_BID_BASE = "https://7u6sphgup5gjuywcvpuwzhruiq0asgdz.lambda-url.us-east-1.on.aws/"
@@ -2302,12 +2236,15 @@ def _deal_name(deal_id):
         if res.get("status") == 200 and isinstance(res.get("data"), dict):
             return (res["data"].get("name") or "").strip()
     except Exception as e:
-        print(f"deal_links: deal lookup failed for {deal_id}: {e}")
+        print(f"send_link: deal lookup failed for {deal_id}: {e}")
     return ""
 
 
-def render_deal_links():
-    """Admin-only: deal-id links (update request, LOI), plus web-bid links by company."""
+def render_send_link():
+    """Admin-only: the one page every outbound link comes from. Three sections —
+    a client's sign-in link, a deal's update/LOI links, a company's bid/offer links.
+    They used to be two pages (?view=link and ?view=deallinks) whose titles gave no
+    hint which was which; both routes now redirect here."""
     # web-bid resolves pricing and holder counts by matching this name against
     # Pipeline, so the picker has to offer the CRM's own casing. _company_id_by_name()
     # lowercases its keys for joining, so read tracked_companies() directly — its
@@ -2316,7 +2253,7 @@ def render_deal_links():
     try:
         wb_names = sorted(set(tracked_companies().values()), key=str.lower)
     except Exception as e:
-        print(f"deal_links: company list unavailable: {e}")
+        print(f"send_link: company list unavailable: {e}")
         wb_names = []
     wb_options = "".join(
         f'<option value="{html.escape(n, quote=True)}"></option>' for n in wb_names)
@@ -2327,83 +2264,159 @@ def render_deal_links():
                "from a name that doesn't match.")
     return html_response("""
     <style>
-      .dl-form { display:flex; gap:8px; flex-wrap:wrap; margin:14px 0 18px; }
-      .dl-form input { padding:9px 12px; font-family:inherit; font-size:14px;
+      .sl-sec { border:1px solid var(--line); border-radius:10px;
+                padding:20px 22px 22px; margin-top:20px; background:#fff; }
+      .sl-head { display:flex; align-items:baseline; gap:10px; }
+      .sl-num { flex:none; width:22px; height:22px; border-radius:50%;
+                background:var(--ink); color:#fff; font-size:12px; font-weight:600;
+                line-height:22px; text-align:center; align-self:center; }
+      .sl-h2 { font-size:19px; }
+      .sl-who { font-size:13.5px; color:var(--muted); margin:6px 0 0;
+                line-height:1.5; }
+      .sl-form { display:flex; gap:8px; flex-wrap:wrap; margin:14px 0 4px; }
+      .sl-form input { padding:9px 12px; font-family:inherit; font-size:14px;
                        border:1px solid var(--line); border-radius:6px; min-width:240px; }
-      .dl-form button { padding:9px 18px; font-family:inherit; font-size:14px;
+      .sl-form button { padding:9px 18px; font-family:inherit; font-size:14px;
                         font-weight:600; border:none; border-radius:6px;
                         background:var(--ink); color:#fff; cursor:pointer; }
-      .dl-out { display:none; margin-top:8px; }
-      .dl-block { margin-top:18px; }
-      .dl-label { font-weight:600; font-size:14px; margin-bottom:6px; }
-      .dl-url { width:100%; padding:10px 12px; font-family:ui-monospace,monospace;
+      .sl-out { display:none; margin-top:10px; }
+      .sl-block { margin-top:16px; }
+      .sl-label { font-weight:600; font-size:14px; margin-bottom:6px; }
+      .sl-url { width:100%; padding:10px 12px; font-family:ui-monospace,monospace;
                 font-size:13px; border:1px solid var(--line); border-radius:6px; }
-      .dl-row { display:flex; gap:8px; align-items:center; margin-top:8px; }
-      .dl-note { font-size:13px; color:#b45309; margin-top:8px; line-height:1.45; }
-      .dl-off .dl-url { background:#f3f4f6; color:#9ca3af; }
-      .dl-off .dl-row { display:none; }
-      .dl-sep { border:none; border-top:1px solid var(--line); margin:34px 0 26px; }
-      .dl-h2 { font-size:20px; margin-bottom:4px; }
-      .dl-hint { font-size:13px; color:var(--muted); margin-top:-8px; }
+      .sl-row { display:flex; gap:8px; align-items:center; margin-top:8px; }
+      .sl-row button { padding:6px 14px; font-family:inherit; font-size:13px;
+                       border:1px solid var(--line); border-radius:6px;
+                       background:#fff; cursor:pointer; }
+      .sl-note { font-size:13px; color:#b45309; margin-top:10px; line-height:1.45; }
+      .sl-open { font-size:13px; color:var(--muted); margin-top:10px; line-height:1.45; }
+      .sl-off .sl-url { background:#f3f4f6; color:#9ca3af; }
+      .sl-off .sl-row { display:none; }
+      .sl-hint { font-size:13px; color:var(--muted); margin:6px 0 0; }
     </style>
-    <h1>Links</h1>
-    <h2 class="dl-h2">Deal links</h2>
-    <p class="sub">Enter a Pipeline deal ID to generate its update-request and LOI signing links.</p>
-    <div class="dl-form">
-      <input id="dl-id" type="text" inputmode="numeric" placeholder="e.g. 12345678">
-      <button type="button" onclick="dlGo()">Get links</button>
-    </div>
-    <div id="dl-out" class="dl-out">
-      <div id="dl-who" style="font-weight:600; margin-bottom:6px;"></div>
-      <div class="dl-block">
-        <div class="dl-label">Update request form</div>
-        <input id="dl-update" class="dl-url" readonly onclick="this.select()">
-        <div class="dl-row">
-          <button type="button" onclick="dlCopy('dl-update')">Copy</button>
-          <a id="dl-update-open" href="#" target="_blank" rel="noopener">Open in new tab &rarr;</a>
+    <h1>Send a link</h1>
+    <p class="sub">Every link you send a client, a counterparty or a company contact is
+      generated here. Three kinds — pick the one that matches who is receiving it.</p>
+
+    <section class="sl-sec">
+      <div class="sl-head"><span class="sl-num">1</span>
+        <h2 class="sl-h2">Client sign-in link</h2></div>
+      <p class="sl-who">Takes a Pipeline <strong>person ID</strong> and returns that
+        client's permanent link into their own watchlist — for that one client only.</p>
+      <div class="sl-note">This link signs whoever opens it in as that client, so it
+        must not be forwarded.</div>
+      <div class="sl-form">
+        <input id="lk-id" type="text" inputmode="numeric" placeholder="e.g. 1309687264">
+        <button type="button" onclick="lkGo()">Get their link</button>
+        <button type="button" onclick="lkView()">View as them</button>
+      </div>
+      <div id="lk-out" class="sl-out">
+        <div id="lk-who" style="font-weight:600; margin-bottom:6px;"></div>
+        <input id="lk-url" class="sl-url" readonly onclick="this.select()">
+        <div class="sl-row">
+          <button type="button" onclick="slCopy('lk-url')">Copy</button>
+          <a id="lk-open" href="#" target="_blank" rel="noopener">Open in new tab &rarr;</a>
         </div>
       </div>
-      <div class="dl-block" id="dl-loi-block">
-        <div class="dl-label">LOI signing link</div>
-        <input id="dl-loi" class="dl-url" readonly onclick="this.select()">
-        <div class="dl-row">
-          <button type="button" onclick="dlCopy('dl-loi')">Copy</button>
-          <a id="dl-loi-open" href="#" target="_blank" rel="noopener">Open in new tab &rarr;</a>
-        </div>
-        <div id="dl-loi-note" class="dl-note"></div>
+    </section>
+
+    <section class="sl-sec">
+      <div class="sl-head"><span class="sl-num">2</span>
+        <h2 class="sl-h2">Deal links</h2></div>
+      <p class="sl-who">Takes a Pipeline <strong>deal ID</strong> and returns that deal's
+        update-request form and LOI signing link — for the parties to that deal.</p>
+      <div class="sl-form">
+        <input id="dl-id" type="text" inputmode="numeric" placeholder="e.g. 12345678">
+        <button type="button" onclick="dlGo()">Get links</button>
       </div>
-    </div>
-    <hr class="dl-sep">
-    <h2 class="dl-h2">Web-bid links</h2>
-    <p class="sub">Enter a company name to generate its buyer bid form and seller offer form links.</p>
-    <div class="dl-form">
-      <input id="wb-name" type="text" list="wb-companies" autocomplete="off"
-             placeholder="Start typing a company name">
-      <button type="button" onclick="wbGo()">Get links</button>
-    </div>
-    <datalist id="wb-companies">""" + wb_options + """</datalist>
-    <p class="dl-hint">""" + html.escape(wb_hint) + """</p>
-    <div id="wb-out" class="dl-out">
-      <div class="dl-block">
-        <div class="dl-label">Bid form (buyer)</div>
-        <input id="wb-buy" class="dl-url" readonly onclick="this.select()">
-        <div class="dl-row">
-          <button type="button" onclick="dlCopy('wb-buy')">Copy</button>
-          <a id="wb-buy-open" href="#" target="_blank" rel="noopener">Open in new tab &rarr;</a>
+      <div id="dl-out" class="sl-out">
+        <div id="dl-who" style="font-weight:600; margin-bottom:6px;"></div>
+        <div class="sl-block">
+          <div class="sl-label">Update request form</div>
+          <input id="dl-update" class="sl-url" readonly onclick="this.select()">
+          <div class="sl-row">
+            <button type="button" onclick="slCopy('dl-update')">Copy</button>
+            <a id="dl-update-open" href="#" target="_blank" rel="noopener">Open in new tab &rarr;</a>
+          </div>
         </div>
-      </div>
-      <div class="dl-block">
-        <div class="dl-label">Offer form (seller)</div>
-        <input id="wb-sell" class="dl-url" readonly onclick="this.select()">
-        <div class="dl-row">
-          <button type="button" onclick="dlCopy('wb-sell')">Copy</button>
-          <a id="wb-sell-open" href="#" target="_blank" rel="noopener">Open in new tab &rarr;</a>
+        <div class="sl-block" id="dl-loi-block">
+          <div class="sl-label">LOI signing link</div>
+          <input id="dl-loi" class="sl-url" readonly onclick="this.select()">
+          <div class="sl-row">
+            <button type="button" onclick="slCopy('dl-loi')">Copy</button>
+            <a id="dl-loi-open" href="#" target="_blank" rel="noopener">Open in new tab &rarr;</a>
+          </div>
+          <div id="dl-loi-note" class="sl-note"></div>
         </div>
       </div>
-      <div class="dl-note">These links carry no token — anyone with the link can open the
-        form, and it collects name and email from anyone not already signed in.</div>
-    </div>
+    </section>
+
+    <section class="sl-sec">
+      <div class="sl-head"><span class="sl-num">3</span>
+        <h2 class="sl-h2">Company links</h2></div>
+      <p class="sl-who">Takes a <strong>company name</strong> and returns that company's
+        buyer bid form and seller offer form — for anyone you want an indication from.</p>
+      <div class="sl-form">
+        <input id="wb-name" type="text" list="wb-companies" autocomplete="off"
+               placeholder="Start typing a company name">
+        <button type="button" onclick="wbGo()">Get links</button>
+      </div>
+      <datalist id="wb-companies">""" + wb_options + """</datalist>
+      <p class="sl-hint">""" + html.escape(wb_hint) + """</p>
+      <div id="wb-out" class="sl-out">
+        <div class="sl-block">
+          <div class="sl-label">Bid form (buyer)</div>
+          <input id="wb-buy" class="sl-url" readonly onclick="this.select()">
+          <div class="sl-row">
+            <button type="button" onclick="slCopy('wb-buy')">Copy</button>
+            <a id="wb-buy-open" href="#" target="_blank" rel="noopener">Open in new tab &rarr;</a>
+          </div>
+        </div>
+        <div class="sl-block">
+          <div class="sl-label">Offer form (seller)</div>
+          <input id="wb-sell" class="sl-url" readonly onclick="this.select()">
+          <div class="sl-row">
+            <button type="button" onclick="slCopy('wb-sell')">Copy</button>
+            <a id="wb-sell-open" href="#" target="_blank" rel="noopener">Open in new tab &rarr;</a>
+          </div>
+        </div>
+        <div class="sl-open">These are open links — they carry no token and need no
+          sign-in. Anyone with the link can open the form, and it collects name and
+          email from anyone not already signed in.</div>
+      </div>
+    </section>
     <script>
+      function slCopy(elId) {
+        var el = document.getElementById(elId);
+        el.select();
+        document.execCommand('copy');
+      }
+      function lkGo() {
+        var id = (document.getElementById('lk-id').value || '').trim();
+        if (!id) { return; }
+        fetch('?view=link_token&id=' + encodeURIComponent(id))
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (!d || !d.url) { alert('Could not generate a link.'); return; }
+            document.getElementById('lk-url').value = d.url;
+            document.getElementById('lk-open').href = d.url;
+            var who = document.getElementById('lk-who');
+            if (d.name) {
+              who.textContent = 'Link for ' + d.name;
+              who.style.color = '';
+            } else {
+              who.textContent = 'No person found with that ID — check before sending.';
+              who.style.color = '#b45309';
+            }
+            document.getElementById('lk-out').style.display = 'block';
+          })
+          .catch(function (e) { alert('Error: ' + e); });
+      }
+      function lkView() {
+        var id = (document.getElementById('lk-id').value || '').trim();
+        if (!id) { return; }
+        window.open('?as=' + encodeURIComponent(id), '_blank');
+      }
       function dlGo() {
         var id = (document.getElementById('dl-id').value || '').trim();
         if (!id) { return; }
@@ -2426,12 +2439,12 @@ def render_deal_links():
             var block = document.getElementById('dl-loi-block');
             var note = document.getElementById('dl-loi-note');
             if (d.loi_url) {
-              block.classList.remove('dl-off');
+              block.classList.remove('sl-off');
               document.getElementById('dl-loi').value = d.loi_url;
               document.getElementById('dl-loi-open').href = d.loi_url;
               note.textContent = '';
             } else {
-              block.classList.add('dl-off');
+              block.classList.add('sl-off');
               document.getElementById('dl-loi').value = '';
               document.getElementById('dl-loi-open').href = '#';
               note.textContent = d.loi_error || 'LOI links are unavailable.';
@@ -2439,11 +2452,6 @@ def render_deal_links():
             document.getElementById('dl-out').style.display = 'block';
           })
           .catch(function (e) { alert('Error: ' + e); });
-      }
-      function dlCopy(elId) {
-        var el = document.getElementById(elId);
-        el.select();
-        document.execCommand('copy');
       }
       var WB_BASE = """ + json.dumps(WEB_BID_BASE) + """;
       // Open by design: no token to fetch, so the links are built right here.
@@ -2507,11 +2515,9 @@ def render_admin_hub():
          ADMIN_PRICING_URL),
         ("Auctions", "Create an auction, view the order book, invite buyers.",
          "?view=auctions"),
-        ("Client links", "Generate a sign-in link for any client, or preview their view.",
-         "?view=link"),
-        ("Links", "Update-request and LOI links for any deal; bid and offer links "
-                  "for any company.",
-         "?view=deallinks"),
+        ("Send a link", "Sign-in links for clients, update and LOI links for deals, "
+                        "bid and offer links for companies.",
+         "?view=sendlink"),
         ("All portfolios", "Every client's holdings in one roll-up.",
          "?view=portfolios"),
         ("Trades book", "The full indications grid, with nudges and LOI requests.",
@@ -4248,8 +4254,13 @@ def _route(event, context):
         return render_admin_hub()
     if qs.get("view") == "auctions" and is_admin:
         return render_auctions_admin()
-    if qs.get("view") == "link" and is_admin:
-        return render_client_link("https://" + event["requestContext"]["domainName"])
+    if qs.get("view") == "sendlink" and is_admin:
+        return render_send_link()
+    # The two pages this one replaced. Bookmarks and pasted URLs still land somewhere
+    # useful, and the address bar corrects itself to the canonical route.
+    if qs.get("view") in ("link", "deallinks") and is_admin:
+        return {"statusCode": 303,
+                "headers": {"Location": raw_path + "?view=sendlink"}, "body": ""}
     if qs.get("view") == "link_token" and is_admin:
         _lk_id = (qs.get("id") or "").strip()
         _lk_base = "https://" + event["requestContext"]["domainName"]
@@ -4265,8 +4276,6 @@ def _route(event, context):
         return {"statusCode": 200,
                 "headers": {"Content-Type": "application/json"},
                 "body": json.dumps({"url": _lk_url, "name": _lk_name})}
-    if qs.get("view") == "deallinks" and is_admin:
-        return render_deal_links()
     if qs.get("view") == "deal_link_tokens" and is_admin:
         _dl_id = (qs.get("id") or "").strip()
         _dl_name = _deal_name(_dl_id) if _dl_id else ""
