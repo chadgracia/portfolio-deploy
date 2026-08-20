@@ -3931,6 +3931,15 @@ def _route(event, context):
     admin_id = read_admin_cookie(get_cookie(event, ADMIN_COOKIE_NAME))
     is_admin = client_id in ADMIN_CLIENT_IDS or bool(admin_id)
 
+    # is_admin above answers "does this browser hold admin privilege" — the right
+    # question for route access and action gates. It's the wrong question for what
+    # the *viewed* identity should see: under a magic-link cookie swap, client_id is
+    # the client but the sticky admin cookie keeps is_admin True, and under ?as=
+    # client_id is still the admin. effective_admin answers "is the identity actually
+    # being rendered the admin's own" — False in both impersonation modes — and is
+    # what render functions should use to decide viewer-facing UI.
+    effective_admin = (client_id in ADMIN_CLIENT_IDS) and not qs.get("as")
+
     # The way back: restore the admin's own session from the sticky cookie, and
     # re-stamp the admin cookie so it rolls forward rather than aging out.
     if qs.get("view") == "resume_admin":
@@ -4314,7 +4323,7 @@ def _route(event, context):
     if qs.get("view") == "invites" and qs.get("id") and is_admin:
         return render_auction_invites(qs["id"], DESK_URL, qs.get("err") or "")
     if qs.get("view") == "auction" and qs.get("id"):
-        return render_auction(qs["id"], view_id, is_admin and not qs.get("as"),
+        return render_auction(qs["id"], view_id, effective_admin,
                               qs.get("err") or "")
     if qs.get("view") == "admin" and is_admin:
         return render_admin_hub()
@@ -4361,10 +4370,10 @@ def _route(event, context):
     if qs.get("view") == "watchlist":
         return render_watchlist_builder(view_id)
     if qs.get("view") == "holdings":
-        return render_portfolio(load_portfolio(view_id), is_admin)
+        return render_portfolio(load_portfolio(view_id), effective_admin)
     if qs.get("view") == "portfolios" and is_admin:
         return render_admin_overview(client_id)
-    return render_watchlist_status(view_id, is_admin and not qs.get("as"))
+    return render_watchlist_status(view_id, effective_admin)
 
 
 def _viewing_as_bar(client_id):
