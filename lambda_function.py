@@ -2407,6 +2407,18 @@ def render_send_link():
           email from anyone not already signed in.</div>
       </div>
     </section>
+
+    <section class="sl-sec">
+      <div class="sl-head"><span class="sl-num">4</span>
+        <h2 class="sl-h2">Mailer list</h2></div>
+      <p class="sl-who">Takes a Pipeline <strong>saved-search ID</strong> and opens that
+        search's mailer list — the recipients for a weekly send.</p>
+      <div class="sl-form">
+        <input id="ml-search" type="text" inputmode="numeric" value="19530439">
+        <button type="button" onclick="mlGo()">Open mailer list</button>
+      </div>
+      <p class="sl-hint">Weekly Mailer Leads is 19530439 — paste any saved search ID.</p>
+    </section>
     <script>
       function slCopy(elId) {
         var el = document.getElementById(elId);
@@ -2486,6 +2498,13 @@ def render_send_link():
         document.getElementById('wb-sell').value = base + 'sell';
         document.getElementById('wb-sell-open').href = base + 'sell';
         document.getElementById('wb-out').style.display = 'block';
+      }
+      function mlGo() {
+        var id = (document.getElementById('ml-search').value || '').trim();
+        if (!/^[0-9]+$/.test(id)) { return; }
+        var url = 'https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/'
+          + '?key=alkj%2A707q235-qjdf&view=mailer&list=1&search=' + id;
+        window.open(url, '_blank');
       }
     </script>
     """, is_admin=True)
