@@ -2133,20 +2133,15 @@ def _wl_structure_label(d):
     return f"{base} ({note})" if (base and note) else (base or note)
 
 
-# Seller Role (custom_label_3938748) on the sell-side deal record. When an SPV/Fund
-# deal's seller is a GP forming/syndicating a new vehicle rather than a holder
-# waiting on buy-side bids, the no-price cell reads "Current round price" instead
-# of "Awaiting bids". Any other structure, role, or a missing field falls back to
-# "Awaiting bids" unchanged.
-WL_SELLER_ROLE_FIELD = "custom_label_3938748"
-WL_SELLER_ROLE_GP_SYNDICATING = 7020357
-
-
+# Seller Role ("seller_role", a flattened display-string field) on the sell-side
+# deal record. When the seller is a GP forming/syndicating a new vehicle rather
+# than a holder waiting on buy-side bids, the no-price cell reads "Current round
+# price" instead of "Awaiting bids". Any other role, or a missing field, falls
+# back to "Awaiting bids" unchanged.
 def _wl_no_price_label(d):
-    if (d.get("structure") or "").strip() == "Fund/SPV":
-        cf = d.get("custom_fields") or {}
-        if WL_SELLER_ROLE_GP_SYNDICATING in cf_id_list(cf.get(WL_SELLER_ROLE_FIELD)):
-            return "Current round price"
+    role = (d.get("seller_role") or "").strip().lower()
+    if "syndicating" in role:
+        return "Current round price"
     return "Awaiting bids"
 
 
