@@ -2133,6 +2133,23 @@ def _wl_structure_label(d):
     return f"{base} ({note})" if (base and note) else (base or note)
 
 
+# Seller Role (custom_label_3938748) on the sell-side deal record. When an SPV/Fund
+# deal's seller is a GP forming/syndicating a new vehicle rather than a holder
+# waiting on buy-side bids, the no-price cell reads "Current round price" instead
+# of "Awaiting bids". Any other structure, role, or a missing field falls back to
+# "Awaiting bids" unchanged.
+WL_SELLER_ROLE_FIELD = "custom_label_3938748"
+WL_SELLER_ROLE_GP_SYNDICATING = 7020357
+
+
+def _wl_no_price_label(d):
+    if (d.get("structure") or "").strip() == "Fund/SPV":
+        cf = d.get("custom_fields") or {}
+        if WL_SELLER_ROLE_GP_SYNDICATING in cf_id_list(cf.get(WL_SELLER_ROLE_FIELD)):
+            return "Current round price"
+    return "Awaiting bids"
+
+
 def _wl_ticket_range(cf):
     """(low, high) in dollars across the person's Ticket Size tiers.
     (None, None) when the field is empty or unknown — no size filtering then.
@@ -3772,7 +3789,7 @@ def render_watchlist_status(client_id, is_admin=False):
                     did = html.escape(str(d.get("id") or ""), quote=True)
                     price = _num(d.get("net")) or _num(d.get("gross"))
                     price_cell = (_wl_pps(price) if price
-                                  else '<span class="wl-soft">Awaiting bids</span>')
+                                  else f'<span class="wl-soft">{_wl_no_price_label(d)}</span>')
                     lr_pps = _num(d.get("company_lr_pps"))
                     lr_cell = _wl_pps(lr_pps) if lr_pps else "&ndash;"
                     if price and lr_pps and lr_pps > 0:
@@ -3859,9 +3876,9 @@ def render_watchlist_status(client_id, is_admin=False):
       .wl-name {{ white-space: normal; }}
       .wl-cat {{ font-size: 12px; font-weight: 400; color: #6b7280; margin-top: 4px;
                  white-space: normal; }}
-      .wl-rm {{ border: none; background: none; color: #b6b2aa; font-size: 17px;
+      .wl-rm {{ border: none; background: none; color: #dc2626; font-size: 17px;
                 line-height: 1; cursor: pointer; padding: 0 2px; flex: 0 0 auto; }}
-      .wl-rm:hover {{ color: #b45309; }}
+      .wl-rm:hover {{ color: #b91c1c; }}
       /* The add prompt: sits below the tables, reads at body size rather than as the
          12px fine print the remove hint uses, and wraps to two lines on a phone. */
       .wl-add {{ display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
