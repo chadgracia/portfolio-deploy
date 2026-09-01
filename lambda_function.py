@@ -2565,6 +2565,11 @@ def render_admin_hub():
         ("Deal alerts", "Active deals with live counterparty match counts, and a "
                         "button to alert them.",
          ADMIN_ALERTS_URL),
+        ("Deal matcher", "Paste an inbound inquiry, match it against the book, draft "
+                         "the intro email.",
+         "https://izahxskgeee5mihwi7y62v333q0ajkji.lambda-url.us-east-1.on.aws/?key=Vq83RkPnZ2wYhT6d"),
+        ("News mailer composer", "Compose and send the company news mailer.",
+         "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?view=news&key=alkj%2A707q235-qjdf"),
     ]
     # Every tool opens in its own tab, so the hub stays put behind them.
     cards = ""
