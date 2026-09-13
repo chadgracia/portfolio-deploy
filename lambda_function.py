@@ -2556,6 +2556,74 @@ ADMIN_MAILER_URL = ADMIN_BRIEF_URL + "&view=mailer"
 ADMIN_PRICING_URL = "https://jw2kk4a73jbft32yf5lr7u22bm0bgkiy.lambda-url.us-east-1.on.aws/"
 ADMIN_ALERTS_URL = ("https://3m3tx5bqrdvddzsyjitnjiipjy0hftoe.lambda-url.us-east-1.on.aws/"
                     "?key=JK8h5Pq2L9aZ7rT3mN6bX")
+SYNDICATE_DASH_URL = ("https://ws4stw4iul75a7yx5dra2wmnq40kipav.lambda-url.us-east-1.on.aws/"
+                      "?key=JK8h5Pq2L9aZ7rT3mN6bX")
+DEALS_KEY = "deals.json"
+SELL_ORDER_FIELD = "custom_label_1958"
+SELL_ORDER_OPTION_ID = 5011675
+
+
+def _deal_cf_option_ids(deal, field):
+    v = (deal.get("custom_fields") or {}).get(field)
+    if v is None:
+        return set()
+    vals = v if isinstance(v, list) else [v]
+    out = set()
+    for x in vals:
+        try:
+            out.add(int(x))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def _deal_linked_person_ids(deal):
+    people = deal.get("people")
+    if isinstance(people, list):
+        return [p.get("id") for p in people if isinstance(p, dict) and p.get("id") is not None]
+    return [pid for pid in (deal.get("person_ids") or []) if pid is not None]
+
+
+def syndicator_eligible_sellers():
+    """Sellers eligible for the Syndicator Dashboard: any person linked to a
+    Sell Order deal (custom_label_1958 contains 5011675). Reads deals.json
+    fresh from the shared CRM snapshot (short timeout, fail-closed -- an
+    empty list on any error, same convention as _people_index()) and looks
+    up each linked person's name/email via the existing people_index.json
+    (never the raw 113 MB people.json -- see _people_index's own docstring
+    on why that file is never loaded directly here). company_name comes
+    from the deal's own "company" object, matching Pipeline's own linkage.
+    Missing/unresolvable fields are skipped silently, per spec."""
+    try:
+        cfg = BotoConfig(connect_timeout=5, read_timeout=5, retries={"max_attempts": 1})
+        s3 = boto3.client("s3", config=cfg)
+        obj = s3.get_object(Bucket=COMPANIES_BUCKET, Key=DEALS_KEY)
+        deals = json.loads(obj["Body"].read()).get("deals", [])
+    except Exception:
+        return []
+    try:
+        idx = _people_index().get("by_id", {})
+    except Exception:
+        idx = {}
+    out = {}
+    for deal in deals:
+        if SELL_ORDER_OPTION_ID not in _deal_cf_option_ids(deal, SELL_ORDER_FIELD):
+            continue
+        company_name = ((deal.get("company") or {}).get("name") or "").strip()
+        if not company_name:
+            continue
+        for pid in _deal_linked_person_ids(deal):
+            if pid in out:
+                continue
+            rec = idx.get(str(pid))
+            if not rec:
+                continue
+            full_name = (rec.get("name") or "").strip()
+            email = (rec.get("email") or "").strip()
+            if not full_name or not email:
+                continue
+            out[pid] = {"full_name": full_name, "company_name": company_name, "email": email}
+    return sorted(out.values(), key=lambda r: r["company_name"].lower())
 
 
 def render_admin_hub():
@@ -2590,6 +2658,29 @@ def render_admin_hub():
                   f' target="_blank" rel="noopener">'
                   f'<div class="hub-title">{html.escape(title)}</div>'
                   f'<div class="hub-desc">{html.escape(desc)}</div></a>')
+
+    sellers = syndicator_eligible_sellers()
+    seller_rows = ""
+    for r in sellers[:50]:
+        my_deals_href = f"{SYNDICATE_DASH_URL}&view_as={urllib.parse.quote(r['email'])}"
+        intros_href = my_deals_href + "&tab=intros"
+        seller_rows += (
+            '<li class="syn-row">'
+            f'<span class="syn-name">{html.escape(r["full_name"])}</span>'
+            f' &middot; <span class="syn-co">{html.escape(r["company_name"])}</span>'
+            f' &middot; <a href="{html.escape(my_deals_href, quote=True)}" target="_blank" rel="noopener">My Deals</a>'
+            f' &middot; <a href="{html.escape(intros_href, quote=True)}" target="_blank" rel="noopener">Intros</a>'
+            '</li>'
+        )
+    syn_card = (
+        '<div class="hub-card syn-card">'
+        '<div class="hub-title">Syndicator Dashboard</div>'
+        f'<a href="{html.escape(SYNDICATE_DASH_URL, quote=True)}" target="_blank" rel="noopener">Open admin view</a>'
+        f'<p class="syn-count">{len(sellers)} sellers eligible</p>'
+        f'<ul class="syn-list">{seller_rows}</ul>'
+        '</div>'
+    )
+
     return html_response(f"""
     <style>
       .hub-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
@@ -2600,10 +2691,18 @@ def render_admin_hub():
       .hub-card:hover {{ border-color:var(--ink); background:#faf8f3; }}
       .hub-title {{ font-weight:600; font-size:16px; margin-bottom:5px; }}
       .hub-desc {{ font-size:13px; color:#6b7280; line-height:1.45; }}
+      .syn-card {{ grid-column: 1 / -1; }}
+      .syn-count {{ font-size:12px; color:#6b7280; margin:10px 0 6px; }}
+      .syn-list {{ list-style:none; max-height:280px; overflow-y:auto; }}
+      .syn-row {{ font-size:13px; padding:5px 0; border-top:1px solid var(--line); }}
+      .syn-row:first-child {{ border-top:none; }}
+      .syn-name {{ font-weight:600; }}
+      .syn-co {{ color:#6b7280; }}
+      .syn-row a {{ color:var(--ink); }}
     </style>
     <h1>Admin</h1>
     <p class="sub">Internal tools. Nothing here is visible to clients.</p>
-    <div class="hub-grid">{cards}</div>
+    <div class="hub-grid">{cards}{syn_card}</div>
     """, eyebrow="Admin", is_admin=True)
 
 
