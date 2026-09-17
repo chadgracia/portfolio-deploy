@@ -1778,10 +1778,10 @@ def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist"
     .section-label {{ font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 10px; }}
     .wbox-row {{ display: flex; flex-wrap: wrap; gap: 8px; }}
     .wchip-row {{ display: flex; flex-wrap: wrap; gap: 5px; }}
-    .wbox {{ display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px; border: 1px solid var(--line); border-radius: 999px; font-size: 13px; color: var(--muted); background: #fff; cursor: pointer; user-select: none; }}
+    .wbox {{ display: inline-flex; align-items: center; gap: 7px; width: auto; white-space: nowrap; padding: 7px 13px; border: 1px solid var(--line); border-radius: 999px; font-size: 13px; color: var(--muted); background: #fff; cursor: pointer; user-select: none; }}
     .wchip {{ display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; line-height: 1.5; color: var(--muted); background: #fff; cursor: pointer; user-select: none; }}
     .wchip input {{ accent-color: var(--accent); margin: 0; width: 12px; height: 12px; flex: none; }}
-    .wbox input {{ accent-color: var(--accent); margin: 0; }}
+    .wbox input {{ accent-color: var(--accent); margin: 0; width: 12px; height: 12px; flex: none; }}
     .wchip:has(input:checked), .wbox:has(input:checked) {{ border-color: var(--accent); color: var(--ink); background: var(--bg); }}
     .wl-tools {{ display: flex; gap: 8px; margin-bottom: 8px; }}
     .wl-search {{ flex: 1; padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }}
