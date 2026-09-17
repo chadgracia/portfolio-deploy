@@ -1125,7 +1125,8 @@ def _watchlist_table(items, target_id=None, show_client_actions=True, with_head=
     </div>"""
 
 
-def render_portfolio(portfolio, is_admin=False):
+def render_portfolio(portfolio, is_admin=False, client_id=None):
+    client_id = client_id or portfolio.get("client_id")
     all_items = portfolio.get("holdings", [])
     held = [h for h in all_items if _holding_status(h) != "watchlist"]
     watch = [h for h in all_items if _holding_status(h) == "watchlist"]
@@ -1262,7 +1263,7 @@ def render_portfolio(portfolio, is_admin=False):
       <span id="fr-msg" class="fr-msg"></span></div>
     </div>
     {invite_panel}"""
-    return html_response(body + EDIT_SCRIPT)
+    return html_response(body + EDIT_SCRIPT, client_id=client_id)
 
 
 # ── Admin roll-up ─────────────────────────────────────────────────────────────────
@@ -1652,7 +1653,7 @@ def render_watchlist_builder(client_id):
         <button type="button" class="navbtn wl-cancel">Cancel</button>
       </div>
     </form>"""
-    return html_response(body + WL_SCRIPT)
+    return html_response(body + WL_SCRIPT, client_id=client_id)
 
 
 # ── HTML shell ───────────────────────────────────────────────────────────────────
@@ -1704,14 +1705,123 @@ _VIEW_META = {
     "sendlink": ("🚀", "Send a Link · GG Admin"),
 }
 
+# ── Unified top nav (same structure/styling as chadgracia/trades and
+# chadgracia/CRMDealDetails) ──────────────────────────────────────────────────────
+_syndicate_tenant_cache = {"emails": None}
+
+
+def _syndicate_eligible_emails():
+    """Lowercased emails eligible for the Syndicate Dashboard, fetched once per
+    warm container from syndicate-dash's own admin-gated ?tenants=list route --
+    the same endpoint chadgracia/trades reads for its My Dashboard nav tab.
+    Fail-soft: any error caches an empty set so the tab just doesn't render."""
+    if _syndicate_tenant_cache["emails"] is not None:
+        return _syndicate_tenant_cache["emails"]
+    emails = set()
+    try:
+        req = urllib.request.Request(SYNDICATE_DASH_URL + "&tenants=list")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+        emails = {(t.get("email") or "").strip().lower()
+                  for t in (data.get("tenants") or []) if t.get("email")}
+    except Exception as e:
+        print(f"Unified nav: syndicate tenants fetch failed (non-fatal): {e}")
+    _syndicate_tenant_cache["emails"] = emails
+    return emails
+
+
+def _render_unified_nav(client_id):
+    """The shared client-facing top nav, rendered above the existing desk
+    header buttons on every client-facing view. Any failure building an
+    optional piece (Auctions, My Dashboard, the viewer's email) must not
+    break the rest of the nav or the page."""
+    email = ""
+    try:
+        rec = lookup_person(client_id)
+        if rec.get("found"):
+            email = (rec.get("email") or "").strip()
+    except Exception as e:
+        print(f"Unified nav: person lookup failed (non-fatal): {e}")
+    who = html.escape(email) if email else html.escape(display_name(client_id))
+
+    auctions_tab = ""
+    try:
+        today = datetime.now(timezone.utc).date()
+        live_ids = []
+        for aid, auc in (_load_auctions() or {}).items():
+            close_date = (auc.get("close_date") or "").strip()
+            if not close_date:
+                live_ids.append(aid)
+                continue
+            try:
+                is_past = datetime.strptime(close_date, "%Y-%m-%d").date() < today
+            except ValueError:
+                is_past = False
+            if not is_past:
+                live_ids.append(aid)
+        if live_ids:
+            auctions_tab = (
+                f'<a href="?view=auction&id={urllib.parse.quote(str(live_ids[0]))}" '
+                f'class="nav-tab">Auctions ({len(live_ids)})</a>'
+            )
+    except Exception as e:
+        print(f"Unified nav: Auctions tab failed (non-fatal): {e}")
+        auctions_tab = ""
+
+    dashboard_tab = ""
+    try:
+        if email and email.lower() in _syndicate_eligible_emails():
+            dashboard_tab = (
+                f'<a href="{html.escape(SYNDICATE_DASH_URL, quote=True)}" '
+                'target="_blank" rel="noopener" class="nav-tab">My Dashboard</a>'
+            )
+    except Exception as e:
+        print(f"Unified nav: My Dashboard tab failed (non-fatal): {e}")
+        dashboard_tab = ""
+
+    account_html = (
+        '<div class="navacct" tabindex="0">'
+        '<span class="navacct-trigger">My Account &#9662;</span>'
+        '<div class="navacct-menu">'
+        f'<div class="navacct-item navacct-static">Signed in as {who}</div>'
+        '<div class="navacct-item navacct-disabled" title="Coming soon">Profile &mdash; coming soon</div>'
+        '<a class="navacct-item" href="?signout=1">Sign out</a>'
+        '</div></div>'
+    )
+
+    return (
+        '<nav class="gg-unav">'
+        '<a href="https://www.graciagroup.com" class="nav-brand">Gracia Group</a>'
+        '<div class="nav-tabs">'
+        '<a href="https://trades.graciagroup.com/" class="nav-tab">Indications</a>'
+        '<a href="?" class="nav-tab">Portfolio &amp; Watchlist</a>'
+        '<span class="nav-tab nav-tab-disabled" title="Coming soon">Introductions</span>'
+        '<span class="nav-tab nav-tab-disabled" title="Coming soon">Demand Board</span>'
+        + auctions_tab
+        + dashboard_tab
+        + '</div>'
+        + account_html
+        + '</nav>'
+    )
+
 
 def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist",
-                  is_admin=False, view=None):
+                  is_admin=False, view=None, client_id=None):
     # Every page shares this shell, so the only thing is_admin changes is which nav
     # constant gets injected. It defaults to False: any caller that doesn't opt in
     # keeps the client-facing nav exactly as before.
     topnav = TOPNAV_ADMIN_HTML if is_admin else TOPNAV_HTML
     favicon_emoji, page_title = _VIEW_META.get(view, ("🗂️", "Desk · Gracia Group"))
+    # The unified nav only renders when a caller passes client_id -- i.e. only on
+    # the client-facing views that opted in above. Any failure inside it must
+    # never break the page, so it's built defensively (see _render_unified_nav).
+    unified_nav_html = ""
+    if client_id:
+        try:
+            unified_nav_html = _render_unified_nav(client_id)
+        except Exception as e:
+            print(f"Unified nav: render failed (non-fatal): {e}")
+            unified_nav_html = ""
     return {
         "statusCode": status,
         "headers": {"Content-Type": "text/html; charset=utf-8"},
@@ -1761,6 +1871,112 @@ def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist"
     .navbtn.brand {{ color: var(--ink); }}
     .navbtn-soon {{ color: #b6b2aa; border-style: dashed; cursor: not-allowed; }}
     .navbtn-soon:hover {{ color: #b6b2aa; border-color: var(--line); }}
+    .gg-unav {{
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+      padding: 10px 0;
+      margin-bottom: 10px;
+      border-bottom: 1px solid #ddd;
+    }}
+    .nav-brand {{
+      font-weight: 700;
+      font-size: 17px;
+      color: var(--ink);
+      text-decoration: none;
+      white-space: nowrap;
+    }}
+    .nav-tabs {{
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 18px;
+      flex: 1;
+    }}
+    .nav-tab {{
+      display: inline-block;
+      background-color: #fff;
+      border: 1px solid #ddd;
+      border-radius: 999px;
+      padding: 8px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--ink);
+      text-decoration: none;
+      white-space: nowrap;
+    }}
+    .nav-tab:hover {{
+      background-color: #f0f0f0;
+    }}
+    .nav-tab-disabled {{
+      color: #999;
+      cursor: default;
+    }}
+    .nav-tab-disabled:hover {{
+      background-color: #fff;
+    }}
+    .navacct {{
+      position: relative;
+      margin-left: auto;
+    }}
+    .navacct-trigger {{
+      display: inline-block;
+      background-color: #fff;
+      border: 1px solid #ddd;
+      border-radius: 999px;
+      padding: 8px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--ink);
+      cursor: pointer;
+      white-space: nowrap;
+    }}
+    .navacct-trigger:hover {{
+      background-color: #f0f0f0;
+    }}
+    .navacct-menu {{
+      display: none;
+      position: absolute;
+      right: 0;
+      top: 100%;
+      margin-top: 6px;
+      background: #fff;
+      border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      min-width: 220px;
+      padding: 6px 0;
+      z-index: 50;
+    }}
+    .navacct:hover .navacct-menu, .navacct:focus-within .navacct-menu {{
+      display: block;
+    }}
+    .navacct-item {{
+      display: block;
+      padding: 9px 16px;
+      font-size: 13px;
+      color: var(--ink);
+      text-decoration: none;
+      white-space: nowrap;
+    }}
+    .navacct-item:hover {{
+      background: #f4f4f4;
+    }}
+    .navacct-static {{
+      color: var(--text-secondary, #666);
+      font-weight: 600;
+      cursor: default;
+    }}
+    .navacct-static:hover {{
+      background: none;
+    }}
+    .navacct-disabled {{
+      color: #999;
+      cursor: default;
+    }}
+    .navacct-disabled:hover {{
+      background: none;
+    }}
     .viewbar {{
       display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
       margin-bottom: 18px; padding: 9px 13px; border-radius: 8px;
@@ -1941,6 +2157,7 @@ def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist"
 </head>
 <body>
   <div class="card">
+    {unified_nav_html}
     {topnav}
     <div class="logo">{html.escape(eyebrow)}</div>
     {body_html}
@@ -3244,7 +3461,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     if not auc:
         return html_response("<h1>Auction not found</h1>"
                              "<p class='wl-soft'>This link may have expired.</p>",
-                             view="auction")
+                             view="auction", client_id=client_id)
 
     company = auc.get("company") or ""
     bids = _load_auction_bids(auction_id)
@@ -3835,7 +4052,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     </script>
     """, eyebrow=("Auction: " + company +
                   ((" — " + auc.get("structure")) if auc.get("structure") else "")),
-       is_admin=is_admin, view="auction")
+       is_admin=is_admin, view="auction", client_id=client_id)
 
 
 def render_watchlist_status(client_id, is_admin=False):
@@ -4073,13 +4290,21 @@ def render_watchlist_status(client_id, is_admin=False):
       .wl-spacer {{ display: none; }}
     </style>
     {body}
-    """, is_admin=is_admin)
+    """, is_admin=is_admin, client_id=client_id)
 
 
 def _route(event, context):
     method = (event.get("requestContext", {}).get("http", {}).get("method") or "GET").upper()
     raw_path = event.get("rawPath", "/")
     qs = event.get("queryStringParameters") or {}
+
+    # 0) Sign out: expire the desk session cookie (same attributes it was set
+    #    with) and bounce to trades' own signout route so both sites' cookies
+    #    clear in one click from the unified nav's Sign out link.
+    if qs.get("signout") == "1":
+        return {"statusCode": 303,
+                "headers": {"Location": "https://trades.graciagroup.com/?signout=1"},
+                "cookies": [_cookie(COOKIE_NAME, "", 0)], "body": ""}
 
     # 1) Magic-link arrival: verify, set session cookie, redirect to a clean URL.
     if qs.get("client") and qs.get("token"):
@@ -4586,7 +4811,7 @@ def _route(event, context):
     if qs.get("view") == "watchlist":
         return render_watchlist_builder(view_id)
     if qs.get("view") == "holdings":
-        return render_portfolio(load_portfolio(view_id), effective_admin)
+        return render_portfolio(load_portfolio(view_id), effective_admin, client_id=view_id)
     if qs.get("view") == "portfolios" and is_admin:
         return render_admin_overview(client_id)
     return render_watchlist_status(view_id, effective_admin)
