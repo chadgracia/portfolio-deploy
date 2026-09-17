@@ -4022,12 +4022,8 @@ def _route(event, context):
             cookies = [session_cookie(qs["client"])]
             if qs["client"] in ADMIN_CLIENT_IDS:
                 cookies.append(admin_cookie(qs["client"]))
-            _dest = raw_path
-            _v = (qs.get("view") or "").strip()
-            if _v in ("auction", "watchlist", "holdings"):
-                _dest = raw_path + "?view=" + urllib.parse.quote(_v)
-                if qs.get("id"):
-                    _dest += "&id=" + urllib.parse.quote(qs["id"])
+            _rest = {k: v for k, v in qs.items() if k not in ("client", "token")}
+            _dest = raw_path + ("?" + urllib.parse.urlencode(_rest) if _rest else "")
             return {"statusCode": 303, "headers": {"Location": _dest},
                     "cookies": cookies, "body": ""}
         return html_response(login_required("That link isn't valid."), 403)
@@ -4049,7 +4045,9 @@ def _route(event, context):
         cookies = [session_cookie(cid)]
         if cid in ADMIN_CLIENT_IDS:            # same stickiness via the SSO door
             cookies.append(admin_cookie(cid))
-        return {"statusCode": 303, "headers": {"Location": raw_path},
+        _rest = {k: v for k, v in qs.items() if k != "sso"}
+        _dest = raw_path + ("?" + urllib.parse.urlencode(_rest) if _rest else "")
+        return {"statusCode": 303, "headers": {"Location": _dest},
                 "cookies": cookies, "body": ""}
 
     # 2) Everything else requires a valid session; scope strictly to that client.
