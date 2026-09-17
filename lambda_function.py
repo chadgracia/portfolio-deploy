@@ -1694,12 +1694,24 @@ DISCLOSURE_HTML = """
     </footer>"""
 
 
+# Per-view favicon emoji + <title> for the shared shell below. Any view not
+# listed here (watchlist, holdings, indications, portfolio, ...) keeps the
+# general desk default.
+_VIEW_META = {
+    "admin": ("🎛️", "Admin Portal · GG"),
+    "auctions": ("⏱️", "Auctions · Gracia Group"),
+    "auction": ("⏱️", "Auctions · Gracia Group"),
+    "sendlink": ("🚀", "Send a Link · GG Admin"),
+}
+
+
 def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist",
-                  is_admin=False):
+                  is_admin=False, view=None):
     # Every page shares this shell, so the only thing is_admin changes is which nav
     # constant gets injected. It defaults to False: any caller that doesn't opt in
     # keeps the client-facing nav exactly as before.
     topnav = TOPNAV_ADMIN_HTML if is_admin else TOPNAV_HTML
+    favicon_emoji, page_title = _VIEW_META.get(view, ("🗂️", "Desk · Gracia Group"))
     return {
         "statusCode": status,
         "headers": {"Content-Type": "text/html; charset=utf-8"},
@@ -1708,8 +1720,8 @@ def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist"
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Desk · Gracia Group</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🗂️</text></svg>">
+  <title>{page_title}</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>{favicon_emoji}</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap" rel="stylesheet">
   <style>
@@ -2540,7 +2552,7 @@ def render_send_link():
         window.open(url, '_blank');
       }
     </script>
-    """, is_admin=True)
+    """, is_admin=True, view="sendlink")
 
 
 AUCTIONS_KEY = "auctions.json"
@@ -2724,7 +2736,7 @@ def render_admin_hub():
     <h1>Admin</h1>
     <p class="sub">Internal tools. Nothing here is visible to clients.</p>
     <div class="hub-grid">{cards}{syn_card}</div>
-    """, eyebrow="Admin", is_admin=True)
+    """, eyebrow="Admin", is_admin=True, view="admin")
 
 
 def _auc_deadline_cell(aid, close_date):
@@ -2849,7 +2861,7 @@ def render_auctions_admin(msg=""):
     <script>
       function aucCopy(t) {{ navigator.clipboard.writeText(t); }}
     </script>
-    """, is_admin=True)
+    """, is_admin=True, view="auctions")
 
 
 def _auction_bids_key(auction_id):
@@ -3231,7 +3243,8 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     auc = (_load_auctions() or {}).get(str(auction_id))
     if not auc:
         return html_response("<h1>Auction not found</h1>"
-                             "<p class='wl-soft'>This link may have expired.</p>")
+                             "<p class='wl-soft'>This link may have expired.</p>",
+                             view="auction")
 
     company = auc.get("company") or ""
     bids = _load_auction_bids(auction_id)
@@ -3822,7 +3835,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     </script>
     """, eyebrow=("Auction: " + company +
                   ((" — " + auc.get("structure")) if auc.get("structure") else "")),
-       is_admin=is_admin)
+       is_admin=is_admin, view="auction")
 
 
 def render_watchlist_status(client_id, is_admin=False):
