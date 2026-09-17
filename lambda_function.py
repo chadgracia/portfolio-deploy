@@ -556,14 +556,31 @@ def save_watchlist_selection(portfolio, person_id, side, option_ids, structures,
            is CRM-only and reported under "gaps".
 
     Returns {"crm_ok", "crm_status", "added", "removed", "annotated", "gaps"}."""
-    want = _dedup_ints(int(o) for o in option_ids)
-    res = _crm_set_interest(person_id, side, want, notify, jwt, mode)
-    crm_ok = res.get("status") == 200
-
-    # ---- S3: resolve picks to company_ids, reconcile this side's watchlist rows ----
     sec = load_security_maps(jwt)
     id_to_name = sec.get(side, {}).get("id_to_name", {})
     name_to_cid = _company_id_by_name()
+
+    want = _dedup_ints(int(o) for o in option_ids)
+    crm_want = want
+    if mode == "replace":
+        # "$"-suffix options are public-market entries: the grid never offers them, so
+        # `want` can never include one. Without this, "replace" would wipe any such
+        # interest the client already has in CRM the moment they save anything else on
+        # this side — it must pass through completely untouched.
+        public_ids = {oid for oid, nm in id_to_name.items() if nm.strip().endswith("$")}
+        if public_ids:
+            cur_person = call_pipeline_api("GET", f"/people/{person_id}.json", jwt=jwt)
+            cur_cf = (cur_person["data"].get("custom_fields", {})
+                      if cur_person.get("status") == 200 and isinstance(cur_person.get("data"), dict)
+                      else {})
+            field = BUY_INTEREST_FIELD if side == "buy" else SELL_INTEREST_FIELD
+            preserved_public = [i for i in cf_id_list(cur_cf.get(field)) if i in public_ids]
+            crm_want = _dedup_ints(want + preserved_public)
+
+    res = _crm_set_interest(person_id, side, crm_want, notify, jwt, mode)
+    crm_ok = res.get("status") == 200
+
+    # ---- S3: resolve picks to company_ids, reconcile this side's watchlist rows ----
     now = datetime.now(timezone.utc).isoformat()
     holdings = portfolio.setdefault("holdings", [])
 
@@ -595,6 +612,8 @@ def save_watchlist_selection(portfolio, person_id, side, option_ids, structures,
         elif st == "watchlist" and h.get("side") == side:
             if cid in picks and cid not in seen:
                 _annotate(h, picks[cid]); seen.add(cid)   # keep + refresh prefs
+            elif (h.get("company_name") or "").strip().endswith("$"):
+                pass  # public-market row: invisible to this grid, never dropped
             elif mode == "replace" and cid not in picks:
                 h["_drop"] = True; removed.append(h.get("company_name") or cid)
 
@@ -1535,11 +1554,12 @@ def render_watchlist_builder(client_id):
         opts = sorted(sec.get(side, {}).get("id_to_name", {}).items(), key=lambda kv: kv[1].lower())
         rows, n_hl = [], 0
         for oid, name in opts:
-            picked = oid in cur[side]
-            # "$" tags a company that already went public — drop it, unless it's
-            # already on the client's list (so a save can't silently remove it).
-            if "$" in name and not picked:
+            # "$" tags a company that already went public — never offered here. The
+            # save handler treats these as invisible too, so an existing "$" interest
+            # can never be picked up (added) or dropped (removed) by this form.
+            if name.strip().endswith("$"):
                 continue
+            picked = oid in cur[side]
             cid = name_to_cid.get(name.strip().lower())
             hl = bool(cid and cid in cats)
             if hl:
