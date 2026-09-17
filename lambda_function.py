@@ -2706,6 +2706,32 @@ def render_admin_hub():
     """, eyebrow="Admin", is_admin=True)
 
 
+def _auc_deadline_cell(aid, close_date):
+    """Deadline display (red 'Closed' once past) plus the inline edit form."""
+    close_date = (close_date or "").strip()
+    if not close_date:
+        display = '<span class="wl-soft">No deadline</span>'
+    else:
+        try:
+            is_past = datetime.strptime(close_date, "%Y-%m-%d").date() < datetime.now(timezone.utc).date()
+        except ValueError:
+            is_past = False
+        pretty = html.escape(_auc_date(close_date))
+        if is_past:
+            display = (f'<span class="auc-deadline-past">{pretty} Closed</span>')
+        else:
+            display = pretty
+    return (
+        f'<td>{display}'
+        f'<form method="POST" action="?view=auctions" class="auc-deadline-form">'
+        f'<input type="hidden" name="action" value="auction_set_deadline">'
+        f'<input type="hidden" name="auction_id" value="{html.escape(aid, quote=True)}">'
+        f'<input type="date" name="close_date" value="{html.escape(close_date, quote=True)}">'
+        f'<button type="submit" class="auc-btn-sm">Update</button>'
+        f'</form></td>'
+    )
+
+
 def render_auctions_admin(msg=""):
     rows = ""
     for aid, a in sorted(_load_auctions().items(),
@@ -2728,6 +2754,7 @@ def render_auctions_admin(msg=""):
             f'<td>{_wl_money(a.get("min_size")) if a.get("min_size") else "&mdash;"} &ndash; '
             f'{_wl_money(a.get("max_size")) if a.get("max_size") else "&mdash;"}</td>'
             f'<td>{_shares_cell}</td>'
+            f'{_auc_deadline_cell(aid, a.get("close_date"))}'
             f'<td class="auc-id">{html.escape(aid)}'
             f'<button type="button" class="auc-copy" onclick="aucCopy(\'{html.escape(aid, quote=True)}\')"'
             f' title="Copy auction ID">&#10697;</button></td>'
@@ -2742,7 +2769,7 @@ def render_auctions_admin(msg=""):
             "</tr>"
         )
     if not rows:
-        rows = '<tr><td colspan="8" class="wl-soft">No auctions yet.</td></tr>'
+        rows = '<tr><td colspan="9" class="wl-soft">No auctions yet.</td></tr>'
     banner = f'<p style="color:#1f7a4d; font-weight:600;">{html.escape(msg)}</p>' if msg else ""
     return html_response(f"""
     <style>
@@ -2766,6 +2793,13 @@ def render_auctions_admin(msg=""):
       table.auc th {{ font-size:12px; letter-spacing:.06em; text-transform:uppercase; }}
       .wl-h2 {{ font-size:17px; margin:22px 0 10px; }}
       .wl-soft {{ color:#6b7280; }}
+      .auc-deadline-past {{ color:#b00020; font-weight:700; }}
+      .auc-deadline-form {{ display:flex; align-items:center; gap:6px; margin-top:6px; }}
+      .auc-deadline-form input[type=date] {{ padding:5px 8px; font-family:inherit; font-size:13px;
+                   border:1px solid var(--line); border-radius:6px; }}
+      .auc-btn-sm {{ padding:5px 10px; font-family:inherit; font-size:12px; font-weight:600;
+                     border:none; border-radius:6px; background:var(--ink); color:#fff;
+                     cursor:pointer; }}
     </style>
     <h1>Auctions</h1>
     <p class="sub">Create an auction, then share its link with interested buyers.</p>
@@ -2789,7 +2823,7 @@ def render_auctions_admin(msg=""):
     <h2 class="wl-h2">Live auctions</h2>
     <table class="auc">
       <thead><tr><th>Company</th><th>Reserve</th><th>Top bid</th><th>Top bidder</th>
-        <th>Size</th><th>Shares</th><th>Auction ID</th><th></th></tr></thead>
+        <th>Size</th><th>Shares</th><th>Deadline</th><th>Auction ID</th><th></th></tr></thead>
       <tbody>{rows}</tbody></table>
     <script>
       function aucCopy(t) {{ navigator.clipboard.writeText(t); }}
@@ -4332,6 +4366,21 @@ def _route(event, context):
                 _save_auctions(_aucs)
             _back = raw_path + "?view=auction&id=" + urllib.parse.quote(_up_id)
             return {"statusCode": 303, "headers": {"Location": _back}, "body": ""}
+
+        if action == "auction_set_deadline":
+            if not is_admin:
+                return {"statusCode": 403,
+                        "headers": {"Content-Type": "text/plain"},
+                        "body": "forbidden"}
+            _dl_back = raw_path + "?view=auctions"
+            _dl_id = (form.get("auction_id") or "").strip()
+            _aucs = _load_auctions()
+            _rec = _aucs.get(_dl_id) if _dl_id else None
+            if _rec is not None:
+                _rec["close_date"] = (form.get("close_date") or "").strip()
+                _aucs[_dl_id] = _rec
+                _save_auctions(_aucs)
+            return {"statusCode": 303, "headers": {"Location": _dl_back}, "body": ""}
 
         if action == "auction_delete":
             if not is_admin:
