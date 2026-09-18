@@ -1828,11 +1828,13 @@ def _render_unified_nav(client_id):
 
 def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist",
                   is_admin=False, view=None, client_id=None):
-    # Every page shares this shell. The three client desk views (Watchlist, Update
-    # watchlist, Holdings) get the left-aligned sub-nav under the unified global
-    # nav; every other caller (admin views, the auction view, send-a-link) keeps
+    # Every page shares this shell. The four client-facing views that also carry
+    # the unified global nav (Watchlist, Update watchlist, Holdings, the auction
+    # buyer view) get the left-aligned sub-nav underneath it instead of the full
+    # legacy topnav, since the unified nav above already has its own brand link
+    # and Indications tab; every other caller (admin views, send-a-link) keeps
     # the legacy topnav exactly as before, unchanged.
-    if view in ("watchlist_status", "watchlist", "holdings"):
+    if view in ("watchlist_status", "watchlist", "holdings", "auction"):
         topnav = _render_desk_subnav(view, is_admin)
     else:
         topnav = TOPNAV_ADMIN_HTML if is_admin else TOPNAV_HTML
