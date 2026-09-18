@@ -1263,7 +1263,7 @@ def render_portfolio(portfolio, is_admin=False, client_id=None):
       <span id="fr-msg" class="fr-msg"></span></div>
     </div>
     {invite_panel}"""
-    return html_response(body + EDIT_SCRIPT, client_id=client_id)
+    return html_response(body + EDIT_SCRIPT, view="holdings", client_id=client_id)
 
 
 # ── Admin roll-up ─────────────────────────────────────────────────────────────────
@@ -1653,7 +1653,7 @@ def render_watchlist_builder(client_id):
         <button type="button" class="navbtn wl-cancel">Cancel</button>
       </div>
     </form>"""
-    return html_response(body + WL_SCRIPT, client_id=client_id)
+    return html_response(body + WL_SCRIPT, view="watchlist", client_id=client_id)
 
 
 # ── HTML shell ───────────────────────────────────────────────────────────────────
@@ -1679,6 +1679,27 @@ TOPNAV_ADMIN_HTML = TOPNAV_HTML.replace(
     '<a class="navbtn" href="https://trades.graciagroup.com/">Indications</a>',
     '<a class="navbtn" href="https://trades.graciagroup.com/">Indications</a>\n'
     '        <a class="navbtn" href="?view=admin">Admin</a>')
+
+# The three client desk views (Watchlist, Update watchlist, Holdings) also carry
+# the unified global nav (see _render_unified_nav), which already has its own
+# Gracia Group brand link and Indications tab. Rather than repeat those in the
+# row underneath, this sub-nav is left-aligned and styled lighter than the
+# global nav-tabs so the hierarchy reads global nav -> section sub-nav.
+_DESK_SUBNAV = (
+    ("watchlist_status", "?", "Watchlist"),
+    ("watchlist", "?view=watchlist", "Update watchlist"),
+    ("holdings", "?view=holdings", "Holdings"),
+)
+
+
+def _render_desk_subnav(active, is_admin=False):
+    pills = "".join(
+        f'<a class="subnav-pill{" active" if key == active else ""}" href="{href}">{label}</a>'
+        for key, href, label in _DESK_SUBNAV
+    )
+    if is_admin:
+        pills += '<a class="subnav-pill" href="?view=admin">Admin</a>'
+    return f'<nav class="gg-subnav">{pills}</nav>'
 
 # Firm legal disclosure, pinned to the very bottom of every page.
 DISCLOSURE_HTML = """
@@ -1807,10 +1828,14 @@ def _render_unified_nav(client_id):
 
 def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist",
                   is_admin=False, view=None, client_id=None):
-    # Every page shares this shell, so the only thing is_admin changes is which nav
-    # constant gets injected. It defaults to False: any caller that doesn't opt in
-    # keeps the client-facing nav exactly as before.
-    topnav = TOPNAV_ADMIN_HTML if is_admin else TOPNAV_HTML
+    # Every page shares this shell. The three client desk views (Watchlist, Update
+    # watchlist, Holdings) get the left-aligned sub-nav under the unified global
+    # nav; every other caller (admin views, the auction view, send-a-link) keeps
+    # the legacy topnav exactly as before, unchanged.
+    if view in ("watchlist_status", "watchlist", "holdings"):
+        topnav = _render_desk_subnav(view, is_admin)
+    else:
+        topnav = TOPNAV_ADMIN_HTML if is_admin else TOPNAV_HTML
     favicon_emoji, page_title = _VIEW_META.get(view, ("🗂️", "Desk · Gracia Group"))
     # The unified nav only renders when a caller passes client_id -- i.e. only on
     # the client-facing views that opted in above. Any failure inside it must
@@ -1915,6 +1940,39 @@ def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist"
     }}
     .nav-tab-disabled:hover {{
       background-color: #fff;
+    }}
+    .gg-subnav {{
+      display: flex;
+      justify-content: flex-start;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 26px;
+    }}
+    .subnav-pill {{
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      line-height: 1;
+      color: var(--muted);
+      text-decoration: none;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 13px;
+      transition: color 0.15s, border-color 0.15s;
+    }}
+    .subnav-pill:hover {{
+      color: var(--ink);
+      border-color: var(--muted);
+    }}
+    .subnav-pill.active {{
+      color: #fff;
+      background: var(--accent);
+      border-color: var(--accent);
+    }}
+    .subnav-pill.active:hover {{
+      color: #fff;
     }}
     .navacct {{
       position: relative;
@@ -4290,7 +4348,7 @@ def render_watchlist_status(client_id, is_admin=False):
       .wl-spacer {{ display: none; }}
     </style>
     {body}
-    """, is_admin=is_admin, client_id=client_id)
+    """, is_admin=is_admin, view="watchlist_status", client_id=client_id)
 
 
 def _route(event, context):
