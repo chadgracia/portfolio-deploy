@@ -1768,21 +1768,11 @@ def _render_unified_nav(client_id):
     auctions_tab = ""
     try:
         today = datetime.now(timezone.utc).date()
-        live_ids = []
-        for aid, auc in (_load_auctions() or {}).items():
-            close_date = (auc.get("close_date") or "").strip()
-            if not close_date:
-                live_ids.append(aid)
-                continue
-            try:
-                is_past = datetime.strptime(close_date, "%Y-%m-%d").date() < today
-            except ValueError:
-                is_past = False
-            if not is_past:
-                live_ids.append(aid)
+        live_ids = [aid for aid, auc in (_load_auctions() or {}).items()
+                    if _auction_is_live(auc, today)]
         if live_ids:
             auctions_tab = (
-                f'<a href="?view=auction&id={urllib.parse.quote(str(live_ids[0]))}" '
+                f'<a href="?view=auctions" '
                 f'class="nav-tab">Auctions ({len(live_ids)})</a>'
             )
     except Exception as e:
@@ -2861,6 +2851,22 @@ def _auc_num(v):
         return None
 
 
+def _auction_is_live(auc, today=None):
+    """True when an auction is still open for bids: status isn't closed, and its
+    close date (if any) is today or later. Shared by the unified nav's Auctions
+    tab count and the live-auctions overview page, so both agree on "live"."""
+    if (auc.get("status") or "open") == "closed":
+        return False
+    close_date = (auc.get("close_date") or "").strip()
+    if not close_date:
+        return True
+    today = today or datetime.now(timezone.utc).date()
+    try:
+        return datetime.strptime(close_date, "%Y-%m-%d").date() >= today
+    except ValueError:
+        return True
+
+
 ADMIN_BRIEF_URL = "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?key=alkj%2A707q235-qjdf"
 ADMIN_MAILER_URL = ADMIN_BRIEF_URL + "&view=mailer"
 ADMIN_PRICING_URL = "https://jw2kk4a73jbft32yf5lr7u22bm0bgkiy.lambda-url.us-east-1.on.aws/"
@@ -3139,6 +3145,60 @@ def render_auctions_admin(msg=""):
       function aucCopy(t) {{ navigator.clipboard.writeText(t); }}
     </script>
     """, is_admin=True, view="auctions")
+
+
+def render_live_auctions_overview(client_id):
+    """Client-facing sibling of render_auction: every currently live auction,
+    same liveness rule as the unified nav's Auctions tab, with no watchlist,
+    indication, or holdings filtering -- every signed-in user sees the same
+    book. Reserve price stays admin-only (see render_auction's own gate on
+    "ask"), so this only ever surfaces the current top bid."""
+    today = datetime.now(timezone.utc).date()
+    live = [(aid, auc) for aid, auc in (_load_auctions() or {}).items()
+            if _auction_is_live(auc, today)]
+    live.sort(key=lambda kv: kv[1].get("close_date") or "9999-99-99")
+
+    if not live:
+        body = '<p class="wl-soft">No live auctions.</p>'
+    else:
+        rows = ""
+        for aid, auc in live:
+            bids = _load_auction_bids(aid).values()
+            amounts = [n for n in (_auc_num(b.get("gross")) for b in bids) if n]
+            top = max(amounts) if amounts else None
+            size_cell = (f'{_wl_money(auc.get("min_size"))} &ndash; {_wl_money(auc.get("max_size"))}'
+                         if (auc.get("min_size") or auc.get("max_size")) else "&mdash;")
+            close_cell = (html.escape(_auc_date(auc.get("close_date")))
+                          if auc.get("close_date") else "Open-ended")
+            _aid_q = html.escape(str(aid), quote=True)
+            rows += (
+                "<tr>"
+                f'<td><strong>{html.escape(auc.get("company") or "")}</strong></td>'
+                f'<td>{html.escape(auc.get("structure") or "") or "&mdash;"}</td>'
+                f'<td>{_wl_pps(top) if top else "&mdash;"}</td>'
+                f'<td>{size_cell}</td>'
+                f'<td>{close_cell}</td>'
+                f'<td><a href="?view=auction&amp;id={_aid_q}">View auction &rarr;</a></td>'
+                "</tr>"
+            )
+        body = (
+            '<table class="auc">'
+            '<thead><tr><th>Company</th><th>Structure</th><th>Current bid</th>'
+            '<th>Size</th><th>Close date</th><th></th></tr></thead>'
+            f'<tbody>{rows}</tbody></table>'
+        )
+
+    return html_response(f"""
+    <style>
+      table.auc {{ width:100%; border-collapse:collapse; font-size:14px; margin-top:8px; }}
+      table.auc th, table.auc td {{ border:1px solid #ddd; padding:10px 12px; text-align:left; }}
+      table.auc th {{ font-size:12px; letter-spacing:.06em; text-transform:uppercase; }}
+      .wl-soft {{ color:#6b7280; }}
+    </style>
+    <h1>Live auctions</h1>
+    <p class="sub">Every auction currently open for bids.</p>
+    {body}
+    """, view="auctions", client_id=client_id)
 
 
 def _auction_bids_key(auction_id):
@@ -4830,6 +4890,8 @@ def _route(event, context):
         return render_admin_hub()
     if qs.get("view") == "auctions" and is_admin:
         return render_auctions_admin()
+    if qs.get("view") == "auctions":
+        return render_live_auctions_overview(view_id)
     if qs.get("view") == "sendlink" and is_admin:
         return render_send_link()
     # The two pages this one replaced. Bookmarks and pasted URLs still land somewhere
