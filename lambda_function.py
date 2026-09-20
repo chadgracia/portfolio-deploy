@@ -1723,6 +1723,7 @@ _VIEW_META = {
     "admin": ("🎛️", "Admin Portal · GG"),
     "auctions": ("⏱️", "Auctions · Gracia Group"),
     "auction": ("⏱️", "Auctions · Gracia Group"),
+    "auction_list": ("⏱️", "Auctions · Gracia Group"),
     "auction_seller": ("📄", "Order Book · Gracia Group"),
     "sendlink": ("🚀", "Send a Link · GG Admin"),
 }
@@ -1768,23 +1769,17 @@ def _render_unified_nav(client_id):
 
     auctions_tab = ""
     try:
-        today = datetime.now(timezone.utc).date()
-        live_ids = []
-        for aid, auc in (_load_auctions() or {}).items():
-            close_date = (auc.get("close_date") or "").strip()
-            if not close_date:
-                live_ids.append(aid)
-                continue
-            try:
-                is_past = datetime.strptime(close_date, "%Y-%m-%d").date() < today
-            except ValueError:
-                is_past = False
-            if not is_past:
-                live_ids.append(aid)
-        if live_ids:
+        live_ids = [aid for aid, auc in (_load_auctions() or {}).items()
+                   if _auction_is_live(auc.get("close_date"))]
+        if len(live_ids) == 1:
+            auctions_href = f"?view=auction&id={urllib.parse.quote(str(live_ids[0]))}"
+        elif live_ids:
+            auctions_href = "?view=auction_list"
+        else:
+            auctions_href = ""
+        if auctions_href:
             auctions_tab = (
-                f'<a href="?view=auction&id={urllib.parse.quote(str(live_ids[0]))}" '
-                f'class="nav-tab">Auctions ({len(live_ids)})</a>'
+                f'<a href="{auctions_href}" class="nav-tab">Auctions ({len(live_ids)})</a>'
             )
     except Exception as e:
         print(f"Unified nav: Auctions tab failed (non-fatal): {e}")
@@ -1835,7 +1830,7 @@ def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist"
     # legacy topnav, since the unified nav above already has its own brand link
     # and Indications tab; every other caller (admin views, send-a-link) keeps
     # the legacy topnav exactly as before, unchanged.
-    if view in ("watchlist_status", "watchlist", "holdings", "auction"):
+    if view in ("watchlist_status", "watchlist", "holdings", "auction", "auction_list"):
         topnav = _render_desk_subnav(view, is_admin)
     else:
         topnav = TOPNAV_ADMIN_HTML if is_admin else TOPNAV_HTML
@@ -2866,6 +2861,20 @@ def _save_auctions(auctions):
     )
 
 
+def _auction_is_live(close_date):
+    """The one open/closed rule every live-auctions surface (nav tab, auction
+    list, admin table) shares: no close_date (open-ended) or a close_date that
+    hasn't passed yet is live; an unparseable close_date is treated as live
+    rather than silently hidden."""
+    close_date = (close_date or "").strip()
+    if not close_date:
+        return True
+    try:
+        return datetime.strptime(close_date, "%Y-%m-%d").date() >= datetime.now(timezone.utc).date()
+    except ValueError:
+        return True
+
+
 def _auc_num(v):
     try:
         s = str(v).replace("$", "").replace(",", "").strip()
@@ -3571,6 +3580,53 @@ AUC_BOOK_ERRS = {
     "bidgone": "That bid is no longer in the book &mdash; it may have just been removed.",
     "bidsave": "That change could not be written to the bid book. Please try again.",
 }
+
+
+def render_auction_list(client_id, is_admin):
+    """Client-facing list of LIVE auctions only -- no bids, no admin controls, no
+    closed auctions. The caller (the session-gated route) enforces the same
+    login wall as the buyer auction view; admins see this read-only list too."""
+    live = [(aid, auc) for aid, auc in _load_auctions().items()
+           if _auction_is_live(auc.get("close_date"))]
+    live.sort(key=lambda kv: (kv[1].get("company") or "").lower())
+
+    if live:
+        cards = "".join(
+            '<div class="aul-card">'
+            '<div class="aul-main">'
+            f'<div class="aul-title">{html.escape(auc.get("company") or "")}'
+            + (f' <span class="aul-structure">&mdash; {html.escape(auc["structure"])}</span>'
+               if auc.get("structure") else "")
+            + '</div>'
+            '<div class="aul-close">'
+            + (f'Closes {html.escape(_auc_date(auc.get("close_date")))}'
+               if auc.get("close_date") else "No deadline")
+            + '</div></div>'
+            f'<a class="aul-link" href="?view=auction&amp;id={html.escape(str(aid), quote=True)}">'
+            'View auction &rarr;</a>'
+            '</div>'
+            for aid, auc in live
+        )
+    else:
+        cards = '<p class="wl-soft">No live auctions right now.</p>'
+
+    body = f"""
+    <style>
+      .aul-list {{ display:flex; flex-direction:column; gap:12px; margin-top:18px; }}
+      .aul-card {{ display:flex; justify-content:space-between; align-items:center;
+                   gap:16px; border:1px solid var(--line); border-radius:8px;
+                   padding:16px 18px; background:#fff; }}
+      .aul-title {{ font-size:16px; font-weight:600; }}
+      .aul-structure {{ font-weight:400; color:#6b7280; }}
+      .aul-close {{ font-size:13px; color:#6b7280; margin-top:4px; }}
+      .aul-link {{ flex:none; font-size:14px; font-weight:600; color:var(--ink);
+                   text-decoration:none; white-space:nowrap; }}
+      .aul-link:hover {{ text-decoration:underline; }}
+    </style>
+    <h1>Live Auctions</h1>
+    <div class="aul-list">{cards}</div>
+    """
+    return html_response(body, is_admin=is_admin, view="auction_list", client_id=client_id)
 
 
 def render_auction(auction_id, client_id, is_admin, err="", min_bump=""):
@@ -5108,6 +5164,8 @@ def _route(event, context):
     if qs.get("view") == "auction" and qs.get("id"):
         return render_auction(qs["id"], view_id, effective_admin,
                               qs.get("err") or "", qs.get("min_bump") or "")
+    if qs.get("view") == "auction_list":
+        return render_auction_list(view_id, effective_admin)
     if qs.get("view") == "admin" and is_admin:
         return render_admin_hub()
     if qs.get("view") == "auctions" and is_admin:
