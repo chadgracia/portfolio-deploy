@@ -1726,11 +1726,40 @@ _VIEW_META = {
     "auction_list": ("⏱️", "Auctions · Gracia Group"),
     "auction_seller": ("📄", "Order Book · Gracia Group"),
     "sendlink": ("🚀", "Send a Link · GG Admin"),
+    "demand": ("🗂️", "Demand Board · Gracia Group"),
 }
 
 # ── Unified top nav (same structure/styling as chadgracia/trades and
 # chadgracia/CRMDealDetails) ──────────────────────────────────────────────────────
 _syndicate_tenant_cache = {"emails": None}
+
+# Demand Board data: syndicate-dash's own precomputed per-company table is the
+# single source of truth (see its ?demand=list route / _handle_demand_list),
+# fetched fresh at most once per _DEMAND_CACHE_TTL_SECONDS per warm container.
+_DEMAND_CACHE_TTL_SECONDS = 15 * 60
+_demand_cache = {"data": None, "fetched_at": 0.0}
+
+
+def _fetch_demand_data():
+    """The Demand Board table straight from syndicate-dash's admin-gated
+    ?demand=list JSON route -- this file never reimplements that aggregation.
+    Cached per warm container for _DEMAND_CACHE_TTL_SECONDS. Returns None on
+    any failure (timeout, bad JSON, non-2xx) so the caller can show its own
+    friendly fallback instead of a broken page."""
+    now = time.monotonic()
+    if (_demand_cache["data"] is not None
+            and (now - _demand_cache["fetched_at"]) < _DEMAND_CACHE_TTL_SECONDS):
+        return _demand_cache["data"]
+    try:
+        req = urllib.request.Request(SYNDICATE_DASH_URL + "&demand=list")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as e:
+        print(f"Demand Board: data fetch failed (non-fatal): {e}")
+        return None
+    _demand_cache["data"] = data
+    _demand_cache["fetched_at"] = now
+    return data
 
 
 def _syndicate_eligible_emails():
@@ -1813,7 +1842,7 @@ def _render_unified_nav(client_id):
         '<a href="https://trades.graciagroup.com/" class="nav-tab">Indications</a>'
         '<a href="?" class="nav-tab">Portfolio &amp; Watchlist</a>'
         '<span class="nav-tab nav-tab-disabled" title="Coming soon">Introductions</span>'
-        '<span class="nav-tab nav-tab-disabled" title="Coming soon">Demand Board</span>'
+        '<a href="?view=demand" class="nav-tab">Demand Board</a>'
         + auctions_tab
         + dashboard_tab
         + '</div>'
@@ -1830,7 +1859,7 @@ def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist"
     # legacy topnav, since the unified nav above already has its own brand link
     # and Indications tab; every other caller (admin views, send-a-link) keeps
     # the legacy topnav exactly as before, unchanged.
-    if view in ("watchlist_status", "watchlist", "holdings", "auction", "auction_list"):
+    if view in ("watchlist_status", "watchlist", "holdings", "auction", "auction_list", "demand"):
         topnav = _render_desk_subnav(view, is_admin)
     else:
         topnav = TOPNAV_ADMIN_HTML if is_admin else TOPNAV_HTML
@@ -3582,6 +3611,87 @@ AUC_BOOK_ERRS = {
 }
 
 
+def render_demand_board(client_id, is_admin):
+    """Client-facing Demand Board at ?view=demand. Counts only -- no QP/
+    Accredited/Unknown breakdown, no names, no emails, no dollar figures --
+    sourced entirely from syndicate-dash's own precomputed table via
+    _fetch_demand_data. Never breaks the page: any failure (network, bad
+    shape, whatever) falls through to a friendly placeholder in the normal
+    shell instead of a stack trace."""
+    try:
+        data = _fetch_demand_data()
+        if not isinstance(data, dict):
+            raise ValueError("no demand data available")
+        rows = [r for r in (data.get("rows") or [])
+               if isinstance(r, dict)
+               and not (r.get("company") or "").strip().endswith("$")
+               and (r.get("buyers") or 0) > 0]
+        rows.sort(key=lambda r: (-(r.get("buyers") or 0), (r.get("company") or "").lower()))
+
+        total_note = ""
+        companies_with_buyers = data.get("companies_with_buyers")
+        if companies_with_buyers:
+            total_note = (f'<p class="dmd-total">{int(companies_with_buyers):,} '
+                          'companies with interested buyers</p>')
+
+        if rows:
+            trs = "".join(
+                '<tr data-name="' + html.escape((r.get("company") or "").lower(), quote=True) + '">'
+                f'<td class="dmd-company">{html.escape(r.get("company") or "")}</td>'
+                f'<td class="num">{int(r.get("buyers") or 0):,}</td>'
+                f'<td class="num">{int(r.get("sellers") or 0):,}</td>'
+                '</tr>'
+                for r in rows
+            )
+        else:
+            trs = '<tr><td colspan="3" class="wl-soft">No live buyer interest right now.</td></tr>'
+
+        body = f"""
+        <style>
+          .dmd-sub {{ color:#6b7280; margin:2px 0 4px; }}
+          .dmd-total {{ color:#6b7280; font-size:13px; margin:0 0 14px; }}
+          .dmd-search {{ width:100%; max-width:320px; padding:9px 12px; margin-bottom:14px;
+                         font-family:inherit; font-size:14px; border:1px solid var(--line);
+                         border-radius:8px; }}
+          table.dmd {{ width:100%; border-collapse:collapse; font-size:14px; }}
+          table.dmd th, table.dmd td {{ border-bottom:1px solid var(--line); padding:10px 14px;
+                                        text-align:left; }}
+          table.dmd th {{ font-size:11px; letter-spacing:.05em; text-transform:uppercase;
+                         color:#6b7280; font-weight:600; }}
+          table.dmd td.num, table.dmd th.num {{ text-align:right; }}
+          .dmd-company {{ font-weight:600; }}
+        </style>
+        <h1>Demand Board</h1>
+        <p class="dmd-sub">Live buyer interest across our private-markets network.</p>
+        {total_note}
+        <input type="text" id="dmd-search" class="dmd-search" autocomplete="off"
+               placeholder="Search companies&hellip;">
+        <table class="dmd">
+          <thead><tr><th>Company</th><th class="num">Interested Buyers</th><th class="num">Sellers</th></tr></thead>
+          <tbody id="dmd-rows">{trs}</tbody>
+        </table>
+        <script>
+          (function () {{
+            var box = document.getElementById('dmd-search');
+            var rows = Array.prototype.slice.call(document.querySelectorAll('#dmd-rows tr[data-name]'));
+            if (!box) return;
+            box.addEventListener('input', function () {{
+              var q = box.value.trim().toLowerCase();
+              rows.forEach(function (tr) {{
+                tr.style.display = tr.getAttribute('data-name').indexOf(q) !== -1 ? '' : 'none';
+              }});
+            }});
+          }})();
+        </script>
+        """
+        return html_response(body, is_admin=is_admin, view="demand", client_id=client_id)
+    except Exception as e:
+        print(f"Demand Board: render failed (non-fatal): {e}")
+        body = ('<h1>Demand Board</h1>'
+               '<p class="wl-soft">The Demand Board is being updated — check back shortly.</p>')
+        return html_response(body, is_admin=is_admin, view="demand", client_id=client_id)
+
+
 def render_auction_list(client_id, is_admin):
     """Client-facing list of LIVE auctions only -- no bids, no admin controls, no
     closed auctions. The caller (the session-gated route) enforces the same
@@ -5220,6 +5330,8 @@ def _route(event, context):
                               qs.get("err") or "", qs.get("min_bump") or "")
     if qs.get("view") == "auction_list":
         return render_auction_list(view_id, effective_admin)
+    if qs.get("view") == "demand":
+        return render_demand_board(view_id, effective_admin)
     if qs.get("view") == "admin" and is_admin:
         return render_admin_hub()
     if qs.get("view") == "auctions" and is_admin:
