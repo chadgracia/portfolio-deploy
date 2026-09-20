@@ -2959,7 +2959,7 @@ def _extend_auction(auc, days):
         old_close = datetime.strptime(close_date, "%Y-%m-%d").date()
     except ValueError:
         return False, "invalid"
-    if old_close < datetime.now(timezone.utc).date():
+    if not _auction_is_live(close_date):
         return False, "closed"
     original = (auc.get("original_bids_close") or "").strip()
     try:
@@ -4592,12 +4592,7 @@ def render_auction_seller(auction_id, stoken, msg="", err="", days=""):
                    f'{(" &mdash; " + html.escape(auc.get("structure"))) if auc.get("structure") else ""}'
                    f'</h1></div></div>')
     close_date = (auc.get("close_date") or "").strip()
-    _is_past = False
-    if close_date:
-        try:
-            _is_past = datetime.strptime(close_date, "%Y-%m-%d").date() < datetime.now(timezone.utc).date()
-        except ValueError:
-            _is_past = False
+    _is_past = bool(close_date) and not _auction_is_live(close_date)
     deadline_html = (f'<p class="au-deadline">Bids close '
                      f'{html.escape(_auc_date(auc.get("close_date")))}.</p>'
                      if auc.get("close_date") else "")
