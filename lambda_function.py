@@ -1723,6 +1723,7 @@ _VIEW_META = {
     "admin": ("🎛️", "Admin Portal · GG"),
     "auctions": ("⏱️", "Auctions · Gracia Group"),
     "auction": ("⏱️", "Auctions · Gracia Group"),
+    "auction_seller": ("📄", "Order Book · Gracia Group"),
     "sendlink": ("🚀", "Send a Link · GG Admin"),
 }
 
@@ -2250,6 +2251,18 @@ def make_token(client_id):
 
 def verify_token(client_id, token):
     return hmac.compare_digest(make_token(client_id), token or "")
+
+
+def make_seller_token(auction_id):
+    """Read-only seller-view token: HMAC over 'seller:<auction_id>'. Same
+    sign_id construction and HMAC_SECRET as the client magic link, so the
+    seller route needs no session or client identity at all -- the token
+    alone is the credential."""
+    return sign_id(HMAC_SECRET, f"seller:{auction_id}")
+
+
+def verify_seller_token(auction_id, token):
+    return hmac.compare_digest(make_seller_token(auction_id), token or "")
 
 
 def _verify_sso_handoff(token):
@@ -2861,6 +2874,29 @@ def _auc_num(v):
         return None
 
 
+def _auc_tick(price):
+    """Standard bid-increment tick for a given reference price."""
+    p = price or 0
+    if p < 25:
+        return 0.10
+    if p < 100:
+        return 0.25
+    if p < 250:
+        return 0.50
+    if p < 500:
+        return 1.00
+    return 2.50
+
+
+def _auc_increment(auc, reference_price):
+    """Minimum bid increment in effect at reference_price: the auction's own
+    configured Min increment ($) if set and > 0, else the automatic tick."""
+    custom = _auc_num((auc or {}).get("min_increment"))
+    if custom and custom > 0:
+        return custom
+    return _auc_tick(reference_price)
+
+
 ADMIN_BRIEF_URL = "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?key=alkj%2A707q235-qjdf"
 ADMIN_MAILER_URL = ADMIN_BRIEF_URL + "&view=mailer"
 ADMIN_PRICING_URL = "https://jw2kk4a73jbft32yf5lr7u22bm0bgkiy.lambda-url.us-east-1.on.aws/"
@@ -3272,6 +3308,27 @@ def _save_auction_bid(auction_id, email, name, bid):
     bid["updated_at"] = now
     bid["first_seen"] = prior.get("first_seen") or now
     bid["revisions"] = int(prior.get("revisions") or 0) + 1
+    # Append-only revision history: a change to an EXISTING bid's price or size
+    # appends one entry; a brand-new bid (no prior record) starts with none --
+    # bids from before this field existed simply have no history yet, and pick
+    # it up starting from their next change, never a fabricated past. Past
+    # entries are carried forward untouched and never rewritten or dropped.
+    history = list(prior.get("revision_history") or [])
+    if prior and (
+        _auc_num(prior.get("gross")) != _auc_num(bid.get("gross"))
+        or _auc_num(prior.get("min_size")) != _auc_num(bid.get("min_size"))
+        or _auc_num(prior.get("max_size")) != _auc_num(bid.get("max_size"))
+    ):
+        history.append({
+            "timestamp": now,
+            "old_price": prior.get("gross"),
+            "new_price": bid.get("gross"),
+            "old_size_min": prior.get("min_size"),
+            "old_size_max": prior.get("max_size"),
+            "new_size_min": bid.get("min_size"),
+            "new_size_max": bid.get("max_size"),
+        })
+    bid["revision_history"] = history
     bids[ekey] = bid
     book["bids"] = bids
     s3.put_object(Bucket=COMPANIES_BUCKET, Key=key,
@@ -3516,7 +3573,7 @@ AUC_BOOK_ERRS = {
 }
 
 
-def render_auction(auction_id, client_id, is_admin, err=""):
+def render_auction(auction_id, client_id, is_admin, err="", min_bump=""):
     auc = (_load_auctions() or {}).get(str(auction_id))
     if not auc:
         return html_response("<h1>Auction not found</h1>"
@@ -3628,6 +3685,12 @@ def render_auction(auction_id, client_id, is_admin, err=""):
     _bits += (f'<span class="au-idbit">Auction ID: {html.escape(_aid_s)}'
               f'<button type="button" class="au-copy" onclick="auCopy(\'{html.escape(_aid_s, quote=True)}\')"'
               f' title="Copy auction ID">&#10697;</button></span>')
+    if is_admin:
+        _seller_url = (f"{DESK_URL}/?view=auction_seller&id={urllib.parse.quote(_aid_s)}"
+                       f"&stoken={make_seller_token(_aid_s)}")
+        _bits += (f'<button type="button" class="au-selllink"'
+                  f' onclick="auCopyFeedback(\'{_js_lit(_seller_url)}\', this)">'
+                  'Copy seller link</button>')
     id_html = f'<div class="au-did">{_bits}</div>'
     header_html = (f'<div class="au-head">{logo_html}'
                    f'<div class="au-headtext"><h1>{html.escape(company)}'
@@ -3674,11 +3737,29 @@ def render_auction(auction_id, client_id, is_admin, err=""):
             _sel = ('' if _coh in ("yes", "no") else ' selected',
                     ' selected' if _coh == "yes" else '',
                     ' selected' if _coh == "no" else '')
+            _bell = ' &#128276;' if b.get("alert_on_higher_bid") else ""
+            if b.get("person_id"):
+                _name_html = (f'<a href="{html.escape(PD_PERSON_URL + urllib.parse.quote(str(b["person_id"])))}"'
+                              f' target="_blank" rel="noopener">{html.escape(_bname)}</a>')
+            else:
+                _name_html = html.escape(_bname)
+            _mail_icon = ""
+            if _bmail:
+                _mail_icon = (f'<button type="button" class="au-mailcopy"'
+                              f' onclick="auCopyFeedback(\'{_js_lit(_bmail)}\', this)"'
+                              f' title="Copy email">&#9993;</button>')
+            _history = list(b.get("revision_history") or [])
+            _revbadge = ""
+            if len(_history) > 1:
+                _tip = "&#10;".join(
+                    f'{html.escape((h.get("timestamp") or "")[:16].replace("T", " "))} '
+                    f'&mdash; {html.escape(_wl_pps(h.get("new_price")))}'
+                    for h in _history)
+                _revbadge = f' <span class="au-revs" title="{_tip}">&times;{len(_history)}</span>'
             rows += (
                 "<tr>"
                 f"<td>{i}</td>"
-                f'<td>{html.escape(_bname)}</td>'
-                f'<td>{html.escape(_bmail)}</td>'
+                f'<td>{_name_html}{_bell}<div class="au-namesub">{_mail_icon}</div></td>'
                 f'<td><input class="au-rin au-rprice" form="{_fid}" name="gross"'
                 f' type="text" inputmode="decimal" aria-label="Bid per share"'
                 f' value="{html.escape(_gross_s, quote=True)}"></td>'
@@ -3701,7 +3782,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                 f'<td><input class="au-rin" form="{_fid}" name="note" type="text"'
                 f' aria-label="Note" value="{html.escape(b.get("note") or "", quote=True)}">'
                 "</td>"
-                f'<td>{html.escape((b.get("updated_at") or "")[:10])}</td>'
+                f'<td>{html.escape((b.get("updated_at") or "")[:10])}{_revbadge}</td>'
                 f'<td class="au-racts">'
                 f'<button class="au-rsave" type="submit" form="{_fid}">Save</button>'
                 f'<button class="au-rdel" type="submit" form="{_fid}x">Remove</button>'
@@ -3732,7 +3813,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                 "</form>"
             )
         if not rows:
-            rows = '<tr><td colspan="10" class="wl-soft">No bids yet.</td></tr>'
+            rows = '<tr><td colspan="9" class="wl-soft">No bids yet.</td></tr>'
         dem_line = (f'<p class="wl-soft">Total demand at max size: '
                     f'<strong>{_wl_money(demand)}</strong> across {len(ranked)} '
                     f'bid{"" if len(ranked) == 1 else "s"}.</p>') if ranked else ""
@@ -3743,7 +3824,7 @@ def render_auction(auction_id, client_id, is_admin, err=""):
                     if err in AUC_BOOK_ERRS else "")
         book = ('<h2 class="wl-h2">Order book</h2>'
                 + err_line + dem_line + edit_hint +
-                '<table class="auc"><thead><tr><th>#</th><th>Name</th><th>Email</th>'
+                '<table class="auc"><thead><tr><th>#</th><th>Name</th>'
                 '<th>Bid ($/sh)</th><th>Size ($)</th><th>IQF</th><th>Funding</th>'
                 '<th>Notes</th><th>Updated</th><th></th></tr></thead>'
                 f'<tbody>{rows}</tbody></table>'
@@ -3792,6 +3873,17 @@ def render_auction(auction_id, client_id, is_admin, err=""):
         _coh = (me or {}).get("cash_on_hand")
         _err_html = ('<p class="au-bad">That bid wasn\'t saved &mdash; enter a number '
                      'greater than 0, e.g. 118.50.</p>') if err == "bid" else ""
+        if err == "increment":
+            _bump = _auc_num(min_bump) or 0
+            _err_html = (f'<p class="au-bad">That bid wasn\'t saved &mdash; bids must '
+                        f'improve by at least {_wl_pps(_bump)}.</p>')
+        # Active minimum increment, shown so a bidder knows the floor before typing:
+        # the reference is their own current bid if they have one, else the top bid.
+        _inc_ref = (_auc_num(me.get("gross")) if me else None) or top or 0
+        _active_inc = _auc_increment(auc, _inc_ref)
+        _mininc_html = (f'<p class="au-mininc">Minimum bid increment: '
+                        f'{_wl_pps(_active_inc)}</p>')
+        _alert_higher = bool(me and me.get("alert_on_higher_bid"))
         try:
             _alert_on = bool(my_email) and my_email in (_load_auction_alerts(auction_id) or {})
         except Exception:
@@ -3821,7 +3913,8 @@ def render_auction(auction_id, client_id, is_admin, err=""):
               <div class="au-full"><label>Your bid ($/share)</label>
                 <input id="au-price" class="au-price" name="gross" type="text"
                        inputmode="decimal" placeholder="0.00"
-                       value="{html.escape(str(_pv or ''), quote=True)}" required></div>
+                       value="{html.escape(str(_pv or ''), quote=True)}" required>
+                {_mininc_html}</div>
               <div><label>Min size ($)</label>
                 <input name="min_size" type="text" inputmode="numeric"
                        value="{html.escape(str(int(_mn)) if _mn else '', quote=True)}"></div>
@@ -3836,6 +3929,11 @@ def render_auction(auction_id, client_id, is_admin, err=""):
               <div class="au-full"><label>Notes (optional)</label>
                 <input name="note" type="text" value="{_nt}"
                        placeholder="e.g. can go higher for the full block"></div>
+              <div class="au-full au-higherbid">
+                <label><input type="checkbox" name="alert_on_higher_bid"
+                       {"checked" if _alert_higher else ""}>
+                  Update me when a higher bid comes in</label>
+              </div>
               <div class="au-full">
                 <div id="au-implied" class="au-implied" style="display:none;"></div>
                 <div id="au-warn" class="au-bad" style="display:none;"></div>
@@ -3955,6 +4053,8 @@ def render_auction(auction_id, client_id, is_admin, err=""):
               <div><label>Min size ($)</label><input name="min_size" value="{_v('min_size')}"></div>
               <div><label>Max size ($)</label><input name="max_size" value="{_v('max_size')}"></div>
               <div><label>Reserve ($/share)</label><input name="ask" value="{_v('ask')}"></div>
+              <div><label title="Blank or 0 = automatic tick from the current bid price.">Min increment ($)</label>
+                <input name="min_increment" value="{_v('min_increment')}" placeholder="Automatic"></div>
               <div><label>Bids close</label><input name="close_date" type="date" value="{_v('close_date')}"></div>
               <div class="au-full"><label>Note to buyers</label>
                 <input name="note" value="{_v('note')}"></div>
@@ -3973,6 +4073,8 @@ def render_auction(auction_id, client_id, is_admin, err=""):
       .au-seller {{ color:#6b7280; font-weight:400; }}
       .au-lead {{ color:#1f7a4d; font-weight:600; }}
       .au-deadline {{ font-weight:600; margin:10px 0 0; }}
+      .au-higherbid {{ font-size:13px; margin:0 0 6px; }}
+      .au-higherbid label {{ display:flex; align-items:center; gap:6px; font-weight:400; }}
       .au-alertrow {{ display:flex; align-items:center; gap:10px; margin:2px 0 12px; }}
       .au-switch {{ position:relative; display:inline-block; width:40px; height:22px; flex:none; }}
       .au-switch input {{ opacity:0; width:0; height:0; }}
@@ -4098,6 +4200,15 @@ def render_auction(auction_id, client_id, is_admin, err=""):
       .au-rowforms {{ display:none; }}
       .au-bookhint {{ font-size:13px; margin:0 0 10px; }}
       .au-bookerr {{ margin:0 0 10px; }}
+      .au-namesub {{ margin-top:2px; }}
+      .au-mailcopy {{ font-family:inherit; font-size:11px; border:none; background:none;
+                      color:var(--muted); cursor:pointer; padding:0; }}
+      .au-mailcopy:hover {{ color:var(--ink); }}
+      .au-revs {{ font-size:11px; color:var(--muted); cursor:default; margin-left:4px; }}
+      .au-selllink {{ margin-left:10px; padding:8px 14px; font-family:inherit; font-size:13px;
+                      font-weight:600; border:1px solid var(--line); border-radius:6px;
+                      background:#fff; color:var(--ink); cursor:pointer; }}
+      .au-mininc {{ font-size:12px; color:var(--muted); margin:4px 0 0; }}
     </style>
     {header_html}
     {note}
@@ -4109,10 +4220,153 @@ def render_auction(auction_id, client_id, is_admin, err=""):
       function auCopy(t) {{
         navigator.clipboard.writeText(t);
       }}
+      // Same as auCopy, but shows a temporary "Copied" confirmation on the
+      // triggering element and falls back to prompt() when the Clipboard API
+      // isn't available (e.g. non-HTTPS or an older browser).
+      function auCopyFeedback(t, el) {{
+        function ok() {{
+          if (!el) {{ return; }}
+          var orig = el.textContent;
+          el.textContent = 'Copied';
+          setTimeout(function () {{ el.textContent = orig; }}, 1200);
+        }}
+        if (navigator.clipboard && navigator.clipboard.writeText) {{
+          navigator.clipboard.writeText(t).then(ok, function () {{ prompt('Copy:', t); }});
+        }} else {{
+          prompt('Copy:', t);
+        }}
+      }}
     </script>
     """, eyebrow=("Auction: " + company +
                   ((" — " + auc.get("structure")) if auc.get("structure") else "")),
        is_admin=is_admin, view="auction", client_id=client_id)
+
+
+def _seller_letter(i):
+    """1-indexed rank -> A, B, ..., Z, AA, AB, ... (spreadsheet column style),
+    so a book past 26 bidders still gets a distinct, sortable label."""
+    s = ""
+    n = i
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        s = chr(65 + rem) + s
+    return s
+
+
+def render_auction_seller(auction_id, stoken):
+    """Read-only, anonymized order book for the seller. Reachable with only a
+    valid stoken -- no client magic link, no admin session -- and must never
+    put a bidder's name, email or person_id anywhere in the response: not in
+    visible text, not in an HTML comment, not in any JSON/JS embedded in the
+    page. Bidders are identified purely by rank letter (Bidder A, B, ...)."""
+    if not verify_seller_token(auction_id, stoken):
+        return {"statusCode": 403, "headers": {"Content-Type": "text/plain"},
+                "body": "forbidden"}
+
+    auc = (_load_auctions() or {}).get(str(auction_id))
+    if not auc:
+        return html_response("<h1>Auction not found</h1>", 404, view="auction_seller")
+
+    company = auc.get("company") or ""
+    bids = _load_auction_bids(auction_id)
+    ranked = sorted(bids.values(),
+                    key=lambda b: (-(_auc_num(b.get("gross")) or 0),
+                                   b.get("updated_at") or ""))
+    top = _auc_num(ranked[0].get("gross")) if ranked else None
+
+    _f = []
+    if auc.get("structure"):
+        _f.append(("Structure", html.escape(auc["structure"])))
+    if auc.get("shares"):
+        _f.append(("Shares", f"{int(_auc_num(auc['shares']) or 0):,}"))
+    if auc.get("min_size"):
+        _f.append(("Size", f'{_wl_money(auc.get("min_size"))} &ndash; '
+                           f'{_wl_money(auc.get("max_size"))}'))
+    _resv = _auc_num(auc.get("ask"))
+    if _resv:
+        _rmet = bool(top and top >= _resv)
+        _f.append(("Reserve", f'<strong>{_wl_pps(_resv)}</strong> '
+                              f'<span class="{"au-ok" if _rmet else "au-unmet"}">'
+                              f'&middot; {"Met" if _rmet else "Unmet"}</span>'))
+    _cells = ""
+    for _i in range(0, len(_f), 2):
+        _pair = _f[_i:_i + 2]
+        _cells += "<tr>"
+        for _lbl, _val in _pair:
+            _cells += f'<th class="au-th">{_lbl}</th><td class="au-td">{_val}</td>'
+        if len(_pair) == 1:
+            _cells += '<th class="au-th"></th><td class="au-td"></td>'
+        _cells += "</tr>"
+    facts_rows = f'<table class="au-ftable">{_cells}</table>' if _f else ""
+
+    header_html = (f'<div class="au-head"><div class="au-headtext"><h1>'
+                   f'{html.escape(company)}'
+                   f'{(" &mdash; " + html.escape(auc.get("structure"))) if auc.get("structure") else ""}'
+                   f'</h1></div></div>')
+    deadline_html = (f'<p class="au-deadline">Bids close '
+                     f'{html.escape(_auc_date(auc.get("close_date")))}.</p>'
+                     if auc.get("close_date") else "")
+
+    demand = sum(_auc_num(b.get("max_size")) or 0 for b in ranked)
+    dem_line = (f'<p class="wl-soft">Total demand at max size: '
+               f'<strong>{_wl_money(demand)}</strong> across {len(ranked)} '
+               f'bid{"" if len(ranked) == 1 else "s"}.</p>') if ranked else ""
+
+    rows = ""
+    for i, b in enumerate(ranked, 1):
+        if b.get("person_id"):
+            cleared, _ = _auction_iqf(b["person_id"])
+        else:
+            cleared = False
+        iqf_cell = ('<span class="au-ok">&#10003;</span>' if cleared
+                    else '<span class="au-bad">&#10007;</span>')
+        _coh = (b.get("cash_on_hand") or "")
+        funding = "Funded" if _coh == "yes" else ("Syndicating" if _coh == "no" else "&mdash;")
+        _gross = _auc_num(b.get("gross"))
+        _mn = _auc_num(b.get("min_size"))
+        _mx = _auc_num(b.get("max_size"))
+        size_txt = (f'{_wl_money(_mn)} &ndash; {_wl_money(_mx)}' if (_mn or _mx) else "&mdash;")
+        rows += (
+            "<tr>"
+            f"<td>{i}</td>"
+            f"<td>Bidder {_seller_letter(i)}</td>"
+            f'<td>{_wl_pps(_gross)}</td>'
+            f"<td>{size_txt}</td>"
+            f"<td>{iqf_cell}</td>"
+            f"<td>{funding}</td>"
+            f'<td>{html.escape((b.get("updated_at") or "")[:10])}</td>'
+            "</tr>"
+        )
+    if not rows:
+        rows = '<tr><td colspan="7" class="wl-soft">No bids yet.</td></tr>'
+    book = ('<h2 class="wl-h2">Order book</h2>' + dem_line +
+            '<table class="auc"><thead><tr><th>#</th><th>Bidder</th>'
+            '<th>Bid ($/sh)</th><th>Size ($)</th><th>IQF</th><th>Funding</th>'
+            '<th>Updated</th></tr></thead>'
+            f'<tbody>{rows}</tbody></table>')
+
+    return html_response(f"""
+    <style>
+      .au-ok {{ color:#1f7a4d; font-weight:600; }}
+      .au-bad {{ color:#b45309; font-weight:600; }}
+      .au-unmet {{ color:#b91c1c; font-weight:600; }}
+      .au-deadline {{ font-weight:600; margin:10px 0 0; }}
+      .au-th {{ text-align:left; color:#6b7280; font-weight:600; padding:4px 12px 4px 0; }}
+      .au-td {{ padding:4px 0; }}
+      .au-ftable {{ margin:6px 0 16px; border-collapse:collapse; }}
+      .auc {{ width:100%; border-collapse:collapse; margin-top:10px; }}
+      .auc th, .auc td {{ text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); }}
+      @media print {{
+        .topnav, .gg-subnav, .gg-unav, button, .legal {{ display:none !important; }}
+        body {{ padding:0; }}
+        .card {{ box-shadow:none; border:none; padding:0; max-width:none; }}
+      }}
+    </style>
+    {header_html}
+    {facts_rows}
+    {deadline_html}
+    {book}
+    """, eyebrow="Seller order book", view="auction_seller")
 
 
 def render_watchlist_status(client_id, is_admin=False):
@@ -4403,6 +4657,11 @@ def _route(event, context):
         return {"statusCode": 303, "headers": {"Location": _dest},
                 "cookies": cookies, "body": ""}
 
+    # 1c) Seller view: read-only, reachable with only a valid stoken -- no client
+    #     magic link, no admin session. Must come before the session gate below.
+    if qs.get("view") == "auction_seller" and qs.get("id"):
+        return render_auction_seller(qs["id"], qs.get("stoken") or "")
+
     # 2) Everything else requires a valid session; scope strictly to that client.
     client_id = read_session(get_cookie(event, COOKIE_NAME))
     if not client_id:
@@ -4502,18 +4761,39 @@ def _route(event, context):
             # that sorts to the bottom and renders as a dash. Reject rather than store.
             _gross = _auc_num(form.get("gross"))
             _bad_bid = _gross is None or _gross <= 0
+            _min_bump = None       # set below when the increment rule rejects this bid
             if _aid and _email and not _bad_bid:
+                _auc_rec = (_load_auctions() or {}).get(_aid) or {}
+                _prior_bids = _load_auction_bids(_aid)
+                _existing = _prior_bids.get(_email)
+                _prior_top = max((_auc_num(b.get("gross")) or 0
+                                  for b in _prior_bids.values()), default=0)
+                # Minimum bid increment, bidder-facing submit only (admin's in-place
+                # order-book edit calls _save_auction_bid directly and never runs this
+                # check). A raise on an existing bid must clear old price + increment;
+                # a brand-new bid only has to clear it when it would land ABOVE the
+                # current top -- landing at or below the top is always allowed, since
+                # this is an order book, not a single ascending clock.
+                if _existing:
+                    _old_gross = _auc_num(_existing.get("gross")) or 0
+                    if _gross > _old_gross:
+                        _inc = _auc_increment(_auc_rec, _old_gross)
+                        if _gross < _old_gross + _inc:
+                            _min_bump = _inc
+                elif _prior_top and _gross > _prior_top:
+                    _inc = _auc_increment(_auc_rec, _prior_top)
+                    if _gross < _prior_top + _inc:
+                        _min_bump = _inc
+            if _aid and _email and not _bad_bid and _min_bump is None:
                 _bid = {
                     "gross": _gross,
                     "min_size": _auc_num(form.get("min_size")),
                     "max_size": _auc_num(form.get("max_size")),
                     "cash_on_hand": "no" if (form.get("cash_on_hand") == "no") else "yes",
                     "note": (form.get("note") or "").strip(),
+                    "alert_on_higher_bid": form.get("alert_on_higher_bid") == "on",
                     "person_id": str(_owner),
                 }
-                _prior_bids = _load_auction_bids(_aid)
-                _prior_top = max((_auc_num(b.get("gross")) or 0
-                                  for b in _prior_bids.values()), default=0)
                 try:
                     _save_auction_bid(_aid, _email, _name, _bid)
                 except Exception as e:
@@ -4528,6 +4808,8 @@ def _route(event, context):
                 _back += "&as=" + urllib.parse.quote(qs["as"])
             if _bad_bid:
                 _back += "&err=bid"
+            elif _min_bump is not None:
+                _back += "&err=increment&min_bump=" + urllib.parse.quote(f"{_min_bump:.2f}")
             return {"statusCode": 303, "headers": {"Location": _back}, "body": ""}
 
         if action == "auction_alert":
@@ -4679,7 +4961,7 @@ def _route(event, context):
                 _rec["structure"] = (form.get("structure") or "").strip()
                 _rec["note"] = (form.get("note") or "").strip()
                 _rec["close_date"] = (form.get("close_date") or "").strip()
-                for _k in ("shares", "min_size", "max_size", "ask"):
+                for _k in ("shares", "min_size", "max_size", "ask", "min_increment"):
                     _rec[_k] = _auc_num(form.get(_k))
                 _aucs[_up_id] = _rec
                 _save_auctions(_aucs)
@@ -4825,7 +5107,7 @@ def _route(event, context):
         return render_auction_invites(qs["id"], DESK_URL, qs.get("err") or "")
     if qs.get("view") == "auction" and qs.get("id"):
         return render_auction(qs["id"], view_id, effective_admin,
-                              qs.get("err") or "")
+                              qs.get("err") or "", qs.get("min_bump") or "")
     if qs.get("view") == "admin" and is_admin:
         return render_admin_hub()
     if qs.get("view") == "auctions" and is_admin:
