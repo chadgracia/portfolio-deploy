@@ -33,7 +33,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import boto3
 from botocore.config import Config as BotoConfig
@@ -2897,6 +2897,55 @@ def _auc_increment(auc, reference_price):
     return _auc_tick(reference_price)
 
 
+AUC_EXTEND_DAYS = (3, 7, 14)
+AUC_EXTEND_CAP_DAYS = 30
+
+
+def _extend_auction(auc, days):
+    """Attempt a seller-initiated extension of auc['close_date'] by `days`.
+    On success, mutates auc in place and returns (True, None): close_date
+    moves forward only, original_bids_close is captured once -- on the
+    FIRST extension ever, from whatever close_date was in effect right
+    before it -- and never overwritten again, and one entry is appended to
+    the auction's own append-only extensions list (past entries are never
+    rewritten or dropped). On failure, auc is left untouched and the
+    second element is a short error code: "invalid" (bad days value or no
+    close_date to extend), "closed" (already past close), or "capped"
+    (would land more than AUC_EXTEND_CAP_DAYS past the ORIGINAL close)."""
+    if days not in AUC_EXTEND_DAYS:
+        return False, "invalid"
+    close_date = (auc.get("close_date") or "").strip()
+    if not close_date:
+        return False, "invalid"
+    try:
+        old_close = datetime.strptime(close_date, "%Y-%m-%d").date()
+    except ValueError:
+        return False, "invalid"
+    if old_close < datetime.now(timezone.utc).date():
+        return False, "closed"
+    original = (auc.get("original_bids_close") or "").strip()
+    try:
+        original_date = (datetime.strptime(original, "%Y-%m-%d").date()
+                         if original else old_close)
+    except ValueError:
+        original_date = old_close
+    new_close = old_close + timedelta(days=days)
+    if new_close > original_date + timedelta(days=AUC_EXTEND_CAP_DAYS):
+        return False, "capped"
+    if not original:
+        auc["original_bids_close"] = close_date
+    auc["close_date"] = new_close.strftime("%Y-%m-%d")
+    history = list(auc.get("extensions") or [])
+    history.append({
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "days_added": days,
+        "old_close": close_date,
+        "new_close": auc["close_date"],
+    })
+    auc["extensions"] = history
+    return True, None
+
+
 ADMIN_BRIEF_URL = "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?key=alkj%2A707q235-qjdf"
 ADMIN_MAILER_URL = ADMIN_BRIEF_URL + "&view=mailer"
 ADMIN_PRICING_URL = "https://jw2kk4a73jbft32yf5lr7u22bm0bgkiy.lambda-url.us-east-1.on.aws/"
@@ -4041,6 +4090,22 @@ def render_auction(auction_id, client_id, is_admin, err="", min_bump=""):
             if isinstance(x, float) and x == int(x):
                 x = int(x)
             return html.escape(str(x), quote=True)
+
+        def _mmdd(d):
+            try:
+                return datetime.strptime(d, "%Y-%m-%d").strftime("%m/%d")
+            except (ValueError, TypeError):
+                return d or ""
+        _ext_hist_html = ""
+        _extensions = auc.get("extensions") or []
+        if _extensions:
+            _ext_lines = "".join(
+                f'<div class="au-extline">Extended by seller: +{e.get("days_added")}d on '
+                f'{html.escape(_mmdd(e.get("old_close")))} &rarr; '
+                f'{html.escape(_mmdd(e.get("new_close")))}</div>'
+                for e in _extensions
+            )
+            _ext_hist_html = f'<div class="au-full au-exthist">{_ext_lines}</div>'
         edit_html = f"""
         <details class="au-edit">
           <summary>Edit auction</summary>
@@ -4056,6 +4121,7 @@ def render_auction(auction_id, client_id, is_admin, err="", min_bump=""):
               <div><label title="Blank or 0 = automatic tick from the current bid price.">Min increment ($)</label>
                 <input name="min_increment" value="{_v('min_increment')}" placeholder="Automatic"></div>
               <div><label>Bids close</label><input name="close_date" type="date" value="{_v('close_date')}"></div>
+              {_ext_hist_html}
               <div class="au-full"><label>Note to buyers</label>
                 <input name="note" value="{_v('note')}"></div>
               <div class="au-full"><button class="au-btn" type="submit">Save changes</button></div>
@@ -4107,6 +4173,8 @@ def render_auction(auction_id, client_id, is_admin, err="", min_bump=""):
       .au-egrid label {{ display:block; font-size:13px; font-weight:600; margin-bottom:4px; }}
       .au-egrid input {{ width:100%; padding:9px 12px; font-family:inherit; font-size:14px;
                          border:1px solid var(--line); border-radius:6px; }}
+      .au-exthist {{ margin-top:-4px; }}
+      .au-extline {{ font-size:12px; color:#6b7280; }}
       .au-btn {{ padding:11px 24px; font-family:inherit; font-size:15px; font-weight:600;
                  border:none; border-radius:6px; background:var(--ink); color:#fff;
                  cursor:pointer; }}
@@ -4253,7 +4321,7 @@ def _seller_letter(i):
     return s
 
 
-def render_auction_seller(auction_id, stoken):
+def render_auction_seller(auction_id, stoken, msg="", err="", days=""):
     """Read-only, anonymized order book for the seller. Reachable with only a
     valid stoken -- no client magic link, no admin session -- and must never
     put a bidder's name, email or person_id anywhere in the response: not in
@@ -4303,9 +4371,52 @@ def render_auction_seller(auction_id, stoken):
                    f'{html.escape(company)}'
                    f'{(" &mdash; " + html.escape(auc.get("structure"))) if auc.get("structure") else ""}'
                    f'</h1></div></div>')
+    close_date = (auc.get("close_date") or "").strip()
+    _is_past = False
+    if close_date:
+        try:
+            _is_past = datetime.strptime(close_date, "%Y-%m-%d").date() < datetime.now(timezone.utc).date()
+        except ValueError:
+            _is_past = False
     deadline_html = (f'<p class="au-deadline">Bids close '
                      f'{html.escape(_auc_date(auc.get("close_date")))}.</p>'
                      if auc.get("close_date") else "")
+
+    _notice_html = ""
+    if msg == "extended":
+        _notice_html = (f'<p class="au-ok au-extnotice">Extended by {html.escape(str(days))} '
+                        f'day{"" if str(days) == "1" else "s"} &mdash; bids now close '
+                        f'{html.escape(_auc_date(auc.get("close_date")))}.</p>')
+    elif err == "closed":
+        _notice_html = ('<p class="au-bad au-extnotice">This auction has already closed '
+                        'and can no longer be extended.</p>')
+    elif err == "capped":
+        _notice_html = ('<p class="au-bad au-extnotice">That extension would push bids '
+                        'close more than 30 days past the original date, so it '
+                        'wasn&#39;t applied.</p>')
+    elif err == "invalid":
+        _notice_html = '<p class="au-bad au-extnotice">That extension could not be applied.</p>'
+
+    extend_html = ""
+    if close_date and not _is_past:
+        _sid = html.escape(str(auction_id), quote=True)
+        _stok = html.escape(stoken, quote=True)
+        _ext_btns = "".join(
+            f'<form method="POST" action="?view=auction_seller&amp;id={_sid}&amp;stoken={_stok}"'
+            ' class="au-extform">'
+            f'<input type="hidden" name="auction_id" value="{_sid}">'
+            f'<input type="hidden" name="stoken" value="{_stok}">'
+            f'<input type="hidden" name="days" value="{d}">'
+            f'<button type="submit" class="au-btn au-extbtn">+{d} days</button>'
+            '</form>'
+            for d in AUC_EXTEND_DAYS
+        )
+        extend_html = (
+            '<div class="au-extend noprint">'
+            '<div class="au-boxhead">Extend auction</div>'
+            f'<div class="au-extrow">{_ext_btns}</div>'
+            '</div>'
+        )
 
     demand = sum(_auc_num(b.get("max_size")) or 0 for b in ranked)
     dem_line = (f'<p class="wl-soft">Total demand at max size: '
@@ -4356,8 +4467,14 @@ def render_auction_seller(auction_id, stoken):
       .au-ftable {{ margin:6px 0 16px; border-collapse:collapse; }}
       .auc {{ width:100%; border-collapse:collapse; margin-top:10px; }}
       .auc th, .auc td {{ text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); }}
+      .au-extend {{ margin:14px 0; padding:14px 16px; border:1px solid var(--line);
+                    border-radius:10px; background:#fafaf8; }}
+      .au-extrow {{ display:flex; gap:10px; margin-top:8px; flex-wrap:wrap; }}
+      .au-extform {{ margin:0; }}
+      .au-extbtn {{ padding:8px 16px; }}
+      .au-extnotice {{ margin:0 0 12px; }}
       @media print {{
-        .topnav, .gg-subnav, .gg-unav, button, .legal {{ display:none !important; }}
+        .topnav, .gg-subnav, .gg-unav, button, .legal, .noprint {{ display:none !important; }}
         body {{ padding:0; }}
         .card {{ box-shadow:none; border:none; padding:0; max-width:none; }}
       }}
@@ -4365,6 +4482,8 @@ def render_auction_seller(auction_id, stoken):
     {header_html}
     {facts_rows}
     {deadline_html}
+    {_notice_html}
+    {extend_html}
     {book}
     """, eyebrow="Seller order book", view="auction_seller")
 
@@ -4607,6 +4726,51 @@ def render_watchlist_status(client_id, is_admin=False):
     """, is_admin=is_admin, view="watchlist_status", client_id=client_id)
 
 
+def _handle_auction_seller_extend(event, qs):
+    """POST from the seller view's own Extend auction buttons. Re-verifies
+    the stoken -- constant-time, exactly like the GET -- before touching
+    anything: the token is this route's only credential, so a forged or
+    stale one gets the same flat 403 the GET would give, not a redirect
+    that might echo it back. A rejected extension (already closed, over
+    the 30-day cap, or a bad days value) still redirects back to the
+    seller view, which shows a plain message -- never a stack trace."""
+    form = _parse_body(event)
+    auction_id = (qs.get("id") or form.get("auction_id") or "").strip()
+    stoken = qs.get("stoken") or form.get("stoken") or ""
+    if not auction_id or not verify_seller_token(auction_id, stoken):
+        return {"statusCode": 403, "headers": {"Content-Type": "text/plain"},
+                "body": "forbidden"}
+    aucs = _load_auctions()
+    auc = aucs.get(str(auction_id))
+    if not auc:
+        return {"statusCode": 404, "headers": {"Content-Type": "text/plain"},
+                "body": "not found"}
+    try:
+        days = int(form.get("days") or "0")
+    except ValueError:
+        days = 0
+    ok, err = _extend_auction(auc, days)
+    _back = (f"?view=auction_seller&id={urllib.parse.quote(str(auction_id))}"
+             f"&stoken={urllib.parse.quote(stoken)}")
+    if ok:
+        aucs[str(auction_id)] = auc
+        _save_auctions(aucs)
+        try:
+            _notify_chad(
+                f"Auction {auction_id} extended by seller to {_auc_date(auc['close_date'])}",
+                (f"Company:    {auc.get('company') or '(unknown)'}\n"
+                 f"Auction:    {auction_id}\n"
+                 f"Extended:   +{days} days\n"
+                 f"New close:  {auc['close_date']}\n"),
+            )
+        except Exception as e:
+            print(f"auction_seller_extend: notify failed: {e}")
+        _back += f"&msg=extended&days={days}"
+    else:
+        _back += f"&err={err}"
+    return {"statusCode": 303, "headers": {"Location": _back}, "body": ""}
+
+
 def _route(event, context):
     method = (event.get("requestContext", {}).get("http", {}).get("method") or "GET").upper()
     raw_path = event.get("rawPath", "/")
@@ -4657,10 +4821,15 @@ def _route(event, context):
         return {"statusCode": 303, "headers": {"Location": _dest},
                 "cookies": cookies, "body": ""}
 
-    # 1c) Seller view: read-only, reachable with only a valid stoken -- no client
-    #     magic link, no admin session. Must come before the session gate below.
+    # 1c) Seller view: read-only except for its own Extend-auction POST, both
+    #     reachable with only a valid stoken -- no client magic link, no admin
+    #     session. Must come before the session gate below.
     if qs.get("view") == "auction_seller" and qs.get("id"):
-        return render_auction_seller(qs["id"], qs.get("stoken") or "")
+        if method == "POST":
+            return _handle_auction_seller_extend(event, qs)
+        return render_auction_seller(qs["id"], qs.get("stoken") or "",
+                                     qs.get("msg") or "", qs.get("err") or "",
+                                     qs.get("days") or "")
 
     # 2) Everything else requires a valid session; scope strictly to that client.
     client_id = read_session(get_cookie(event, COOKIE_NAME))
