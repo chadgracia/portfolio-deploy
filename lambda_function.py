@@ -2452,24 +2452,34 @@ WL_TICKET_SIZE_MAP = {
 }
 
 
+def _fee_pct(v):
+    """A fee/carry percentage as a bare number (e.g. '5' or '2.5'), or None
+    when unset/unparseable. Shared by the watchlist structure cell and the
+    auction Fund Deal Summary so both format fees identically."""
+    try:
+        f = float(str(v).replace("%", "").strip())
+    except (TypeError, ValueError):
+        return None
+    return int(f) if f == int(f) else f
+
+
+def _wl_layers_label(layers_val):
+    """'SPV on cap table'/'2-Layer SPV'/'3-Layer SPV' -> '1L'/'2L'/'3L', the
+    same abbreviation the watchlist structure cell and the auction Fund Deal
+    Summary both use. Unrecognized/blank input returns ''."""
+    return {"spv on cap table": "1L", "2-layer spv": "2L",
+            "3-layer spv": "3L"}.get((layers_val or "").strip().lower(), "")
+
+
 def _wl_structure_label(d):
     """Structure cell for a watchlist deal row, annotated with layers and fees:
     'Fund (1L - 5/0/10)' = structure (layers - seller_fee/management_fee/carry).
     Fees show only when at least one of the three is recorded; layers only when
     recognized. Falls back to the bare structure string."""
     base = (d.get("structure") or "").strip()
-    layers_val = (d.get("layers") or "").strip()
-    layer = {"spv on cap table": "1L", "2-layer spv": "2L",
-             "3-layer spv": "3L"}.get(layers_val.lower(), "")
-
-    def _fee(v):
-        try:
-            f = float(str(v).replace("%", "").strip())
-        except (TypeError, ValueError):
-            return None
-        return int(f) if f == int(f) else f
-    fees = [_fee(d.get("seller_fee")), _fee(d.get("management_fee")),
-            _fee(d.get("carry"))]
+    layer = _wl_layers_label(d.get("layers"))
+    fees = [_fee_pct(d.get("seller_fee")), _fee_pct(d.get("management_fee")),
+            _fee_pct(d.get("carry"))]
     fee_str = ("/".join("0" if f is None else str(f) for f in fees)
                if any(f is not None for f in fees) else "")
 
@@ -3235,7 +3245,8 @@ def render_auctions_admin(msg=""):
                      cursor:pointer; }}
     </style>
     <h1>Auctions</h1>
-    <p class="sub">Create an auction, then share its link with interested buyers.</p>
+    <p class="sub">Create an auction, then share its link with interested buyers.
+    Fields left blank fill in from the seed deal, if one is given.</p>
     {banner}
     <form method="POST" action="?view=auctions">
       <input type="hidden" name="action" value="auction_create">
@@ -3245,6 +3256,7 @@ def render_auctions_admin(msg=""):
         <div><label>Reserve price per share</label><input name="ask" placeholder="110"></div>
         <div><label>Shares (optional)</label><input name="shares" placeholder="100000"></div>
         <div><label>Structure</label><input name="structure" placeholder="Direct Transfer"></div>
+        <div><label>Share class (optional)</label><input name="share_class" placeholder="Common"></div>
         <div><label>Bids close (blank = open-ended)</label><input name="close_date" type="date"></div>
         <div><label>Min size ($)</label><input name="min_size" placeholder="250000"></div>
         <div><label>Max size ($)</label><input name="max_size" placeholder="10000000"></div>
@@ -3463,6 +3475,69 @@ AUC_CLASS_FIELD = "custom_label_3064330"
 AUC_SHARES_FIELD = "custom_label_3070843"
 AUC_CLASS_LABELS = {5077831: "Common", 5077834: "Preferred",
                     5077912: "Mixed", 5077915: "Any"}
+# Pipeline CRM custom field for the fund's exemption, e.g. "3(c)(1)" / "3(c)(7)".
+AUC_FUND_EXEMPTION_FIELD = "custom_label_4006089"
+
+
+def _auction_deal_prefill(deal_id, company_name):
+    """Auction-record fields sourced from the deal, for the create-from-deal
+    flow and the Edit Auction form: only fields that are empty on the auction
+    itself should ever be overwritten by these, never a manually-entered
+    value. Two caches, both already read elsewhere in this repo, split the
+    fields between them:
+      - full-pipeline-cache/deals.json (DEALS_KEY on COMPANIES_BUCKET), the
+        raw Pipeline snapshot syndicator_eligible_sellers also reads: shares
+        and share class (the same AUC_SHARES_FIELD/AUC_CLASS_FIELD custom
+        fields _auction_deal_facts already resolves, just from the cache
+        instead of a live per-request API call), the deal summary as the
+        description/teaser, and the fund exemption custom field.
+      - pipeline-public-deal-data/pipeline_deals.json (WL_DEALS_BUCKET/
+        WL_DEALS_KEY), the same flattened cache the trades watchlist and
+        _wl_structure_label read: structure, size, price and the three fund
+        fees/layers, none of which are broken out as their own custom fields
+        here.
+    Never raises; a field simply stays at its empty default on any failure."""
+    out = {"structure": "", "shares": None, "price": None, "min_size": None,
+           "max_size": None, "share_class": "", "description": "",
+           "management_fee": None, "seller_fee": None, "carry": None,
+           "layers": "", "fund_exemption": ""}
+    if not deal_id:
+        return out
+    deal_id = str(deal_id)
+
+    raw_deals = (_wl_json(COMPANIES_BUCKET, DEALS_KEY, {}) or {}).get("deals") or []
+    deal = next((d for d in raw_deals if str(d.get("id")) == deal_id), None)
+    if deal:
+        cf = deal.get("custom_fields") or {}
+        for oid in cf_id_list(cf.get(AUC_CLASS_FIELD)):
+            if oid in AUC_CLASS_LABELS:
+                out["share_class"] = AUC_CLASS_LABELS[oid]
+                break
+        out["shares"] = _auc_num(cf.get(AUC_SHARES_FIELD))
+        out["description"] = (deal.get("summary") or "").strip()
+        _exempt = cf.get(AUC_FUND_EXEMPTION_FIELD)
+        if isinstance(_exempt, list):
+            _exempt = _exempt[0] if _exempt else None
+        if _exempt not in (None, ""):
+            out["fund_exemption"] = str(_exempt).strip()
+
+    wl_deals = _wl_json(WL_DEALS_BUCKET, WL_DEALS_KEY, [])
+    if not isinstance(wl_deals, list):
+        wl_deals = []
+    wl = next((d for d in wl_deals if str(d.get("id")) == deal_id), None)
+    if not wl and company_name:
+        wl = next((d for d in wl_deals if (d.get("company") or "").strip().lower()
+                   == company_name.strip().lower()), None)
+    if wl:
+        out["structure"] = (wl.get("structure") or "").strip()
+        out["min_size"] = _auc_num(wl.get("min_deal_size"))
+        out["max_size"] = _auc_num(wl.get("max_deal_size"))
+        out["price"] = _auc_num(wl.get("net")) or _auc_num(wl.get("gross"))
+        out["management_fee"] = _fee_pct(wl.get("management_fee"))
+        out["seller_fee"] = _fee_pct(wl.get("seller_fee"))
+        out["carry"] = _fee_pct(wl.get("carry"))
+        out["layers"] = _wl_layers_label(wl.get("layers"))
+    return out
 
 
 def _auc_date(raw):
@@ -3878,16 +3953,40 @@ def render_auction(auction_id, client_id, is_admin, err="", min_bump=""):
     bid_stats = f'<div class="au-bstats">{bid_stats}</div>' if bid_stats else ""
 
     facts = _auction_deal_facts(auc.get("deal_id"), company)
+    # Manually-entered auction values always win; the deal only fills gaps.
+    deal_pre = _auction_deal_prefill(auc.get("deal_id"), company)
+    _structure_val = (auc.get("structure") or "").strip() or deal_pre["structure"]
+    _share_class_val = (auc.get("share_class") or "").strip() or deal_pre["share_class"]
+    _shares_val = _auc_num(auc.get("shares"))
+    if _shares_val is None:
+        _shares_val = deal_pre["shares"]
+    _min_size_val = _auc_num(auc.get("min_size"))
+    if _min_size_val is None:
+        _min_size_val = deal_pre["min_size"]
+    _max_size_val = _auc_num(auc.get("max_size"))
+    if _max_size_val is None:
+        _max_size_val = deal_pre["max_size"]
+
     _f = []
-    if auc.get("structure"):
-        _f.append(("Structure", html.escape(auc["structure"])))
-    if facts["share_class"]:
-        _f.append(("Share class", html.escape(facts["share_class"])))
-    if auc.get("min_size"):
-        _f.append(("Size", f'{_wl_money(auc.get("min_size"))} &ndash; '
-                           f'{_wl_money(auc.get("max_size"))}'))
-    if facts["shares"]:
-        _f.append(("Shares", f"{int(facts['shares']):,}"))
+    if _structure_val:
+        _f.append(("Structure", html.escape(_structure_val)))
+    if _share_class_val:
+        _f.append(("Share class", html.escape(_share_class_val)))
+    if _structure_val and ("fund" in _structure_val.lower() or "spv" in _structure_val.lower()):
+        if deal_pre["management_fee"] is not None:
+            _f.append(("Management Fee", f'{deal_pre["management_fee"]}%'))
+        if deal_pre["seller_fee"] is not None:
+            _f.append(("Seller Fee", f'{deal_pre["seller_fee"]}%'))
+        if deal_pre["carry"] is not None:
+            _f.append(("Carry", f'{deal_pre["carry"]}%'))
+        if deal_pre["layers"]:
+            _f.append(("Layers", html.escape(deal_pre["layers"])))
+        if deal_pre["fund_exemption"]:
+            _f.append(("Fund Exemption", html.escape(deal_pre["fund_exemption"])))
+    if _min_size_val or _max_size_val:
+        _f.append(("Size", f'{_wl_money(_min_size_val)} &ndash; {_wl_money(_max_size_val)}'))
+    if _shares_val:
+        _f.append(("Shares", f"{int(_shares_val):,}"))
     _resv = _auc_num(auc.get("ask"))
     if _resv and is_admin:
         _rmet = bool(top and top >= _resv)
@@ -3939,9 +4038,13 @@ def render_auction(auction_id, client_id, is_admin, err="", min_bump=""):
     desc_html = (f'<p class="au-desc">{html.escape(facts["description"])}</p>'
                  if facts["description"] else "")
     cat_html = ""
+    # Deal description/teaser: the cached deal summary (see _auction_deal_prefill)
+    # takes priority over the live-fetched one, per the same cache-first rule as
+    # the fields above; the live value only covers a deal not yet in the cache.
+    _teaser = deal_pre["description"] or facts["notes"]
     notes_html = (f'<div class="au-cat"><div class="au-catlbl">Seller notes</div>'
-                  f'<div>{html.escape(facts["notes"])}</div></div>'
-                  if facts["notes"] else "")
+                  f'<div>{html.escape(_teaser)}</div></div>'
+                  if _teaser else "")
     _did = str(auc.get("deal_id") or "")
     _aid_s = str(auction_id)
     _bits = ""
@@ -4303,8 +4406,10 @@ def render_auction(auction_id, client_id, is_admin, err="", min_bump=""):
 
     edit_html = ""
     if is_admin:
-        def _v(k):
+        def _v(k, fallback=""):
             x = auc.get(k)
+            if x in (None, ""):
+                x = fallback
             if x in (None, ""):
                 return ""
             if isinstance(x, float) and x == int(x):
@@ -4333,11 +4438,12 @@ def render_auction(auction_id, client_id, is_admin, err="", min_bump=""):
             <input type="hidden" name="action" value="auction_update">
             <input type="hidden" name="auction_id" value="{html.escape(str(auction_id), quote=True)}">
             <div class="au-egrid">
-              <div><label>Structure</label><input name="structure" value="{_v('structure')}"></div>
-              <div><label>Shares</label><input name="shares" value="{_v('shares')}"></div>
-              <div><label>Min size ($)</label><input name="min_size" value="{_v('min_size')}"></div>
-              <div><label>Max size ($)</label><input name="max_size" value="{_v('max_size')}"></div>
-              <div><label>Reserve ($/share)</label><input name="ask" value="{_v('ask')}"></div>
+              <div><label>Structure</label><input name="structure" value="{_v('structure', deal_pre['structure'])}"></div>
+              <div><label>Share class</label><input name="share_class" value="{_v('share_class', deal_pre['share_class'])}"></div>
+              <div><label>Shares</label><input name="shares" value="{_v('shares', deal_pre['shares'])}"></div>
+              <div><label>Min size ($)</label><input name="min_size" value="{_v('min_size', deal_pre['min_size'])}"></div>
+              <div><label>Max size ($)</label><input name="max_size" value="{_v('max_size', deal_pre['max_size'])}"></div>
+              <div><label>Reserve ($/share)</label><input name="ask" value="{_v('ask', deal_pre['price'])}"></div>
               <div><label title="Blank or 0 = automatic tick from the current bid price.">Min increment ($)</label>
                 <input name="min_increment" value="{_v('min_increment')}" placeholder="Automatic"></div>
               <div><label>Bids close</label><input name="close_date" type="date" value="{_v('close_date')}"></div>
@@ -5343,6 +5449,7 @@ def _route(event, context):
             _rec = _aucs.get(_up_id)
             if _rec is not None:
                 _rec["structure"] = (form.get("structure") or "").strip()
+                _rec["share_class"] = (form.get("share_class") or "").strip()
                 _rec["note"] = (form.get("note") or "").strip()
                 _rec["close_date"] = (form.get("close_date") or "").strip()
                 for _k in ("shares", "min_size", "max_size", "ask", "min_increment"):
@@ -5389,16 +5496,28 @@ def _route(event, context):
                         "body": "forbidden"}
             _auc = _load_auctions()
             _aid = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+            _cr_company = (form.get("company") or "").strip()
+            _cr_deal_id = (form.get("deal_id") or "").strip()
+            # Any of these left blank on the create form get filled from the
+            # seed deal; anything the admin actually typed is kept as-is.
+            _cr_pre = _auction_deal_prefill(_cr_deal_id, _cr_company)
+            _cr_ask = _auc_num(form.get("ask"))
+            _cr_shares = _auc_num(form.get("shares"))
+            _cr_structure = (form.get("structure") or "").strip()
+            _cr_share_class = (form.get("share_class") or "").strip()
+            _cr_min_size = _auc_num(form.get("min_size"))
+            _cr_max_size = _auc_num(form.get("max_size"))
             _auc[_aid] = {
-                "company": (form.get("company") or "").strip(),
-                "deal_id": (form.get("deal_id") or "").strip(),
-                "ask": _auc_num(form.get("ask")),
-                "shares": _auc_num(form.get("shares")),
-                "structure": (form.get("structure") or "").strip(),
+                "company": _cr_company,
+                "deal_id": _cr_deal_id,
+                "ask": _cr_ask if _cr_ask is not None else _cr_pre["price"],
+                "shares": _cr_shares if _cr_shares is not None else _cr_pre["shares"],
+                "structure": _cr_structure or _cr_pre["structure"],
+                "share_class": _cr_share_class or _cr_pre["share_class"],
                 "close_date": (form.get("close_date") or "").strip(),
                 "buyers": _auc_num(form.get("buyers")),
-                "min_size": _auc_num(form.get("min_size")),
-                "max_size": _auc_num(form.get("max_size")),
+                "min_size": _cr_min_size if _cr_min_size is not None else _cr_pre["min_size"],
+                "max_size": _cr_max_size if _cr_max_size is not None else _cr_pre["max_size"],
                 "note": (form.get("note") or "").strip(),
                 "status": "open",
                 "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
