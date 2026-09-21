@@ -3475,8 +3475,27 @@ AUC_CLASS_FIELD = "custom_label_3064330"
 AUC_SHARES_FIELD = "custom_label_3070843"
 AUC_CLASS_LABELS = {5077831: "Common", 5077834: "Preferred",
                     5077912: "Mixed", 5077915: "Any"}
-# Pipeline CRM custom field for the fund's exemption, e.g. "3(c)(1)" / "3(c)(7)".
+# Pipeline CRM custom field for the fund's exemption. The cached value is an
+# option ID, not a string -- verified in chadgracia/deal-update-form's own
+# _FE_LABELS map, which this mirrors exactly.
 AUC_FUND_EXEMPTION_FIELD = "custom_label_4006089"
+AUC_FUND_EXEMPTION_LABELS = {7200027: "3(c)(1)", 7200028: "3(c)(7)",
+                             7201486: "Other / Non-US"}
+
+
+def _auc_fund_exemption_label(val):
+    """Resolve a raw custom_label_4006089 value to its option label. val may
+    arrive as an int, float, or numeric string (option IDs from JSON can come
+    back in any of these forms) -- int(float(str(val))) normalises all three
+    before the label lookup. Any unknown or unparseable value falls back to
+    showing itself, as a string, rather than going blank."""
+    if val in (None, ""):
+        return ""
+    try:
+        oid = int(float(str(val)))
+    except (TypeError, ValueError):
+        return str(val).strip()
+    return AUC_FUND_EXEMPTION_LABELS.get(oid, str(val).strip())
 
 
 def _auction_deal_prefill(deal_id, company_name):
@@ -3518,8 +3537,7 @@ def _auction_deal_prefill(deal_id, company_name):
         _exempt = cf.get(AUC_FUND_EXEMPTION_FIELD)
         if isinstance(_exempt, list):
             _exempt = _exempt[0] if _exempt else None
-        if _exempt not in (None, ""):
-            out["fund_exemption"] = str(_exempt).strip()
+        out["fund_exemption"] = _auc_fund_exemption_label(_exempt)
 
     wl_deals = _wl_json(WL_DEALS_BUCKET, WL_DEALS_KEY, [])
     if not isinstance(wl_deals, list):
