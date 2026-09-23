@@ -2616,7 +2616,10 @@ def _wl_company_meta(names, jwt):
 TRADE_UPDATE_BASE = DESK_URL + "/update/"
 LOI_SIGN_BASE = DESK_URL + "/loi/"
 WEB_BID_BASE = DESK_URL + "/bid/"
-TRADE_UPDATE_SECRET = "trade-update"   # the update form's key is fixed, not a secret
+# Update-form link key: the dedicated FORM_HMAC_SECRET env var, the same value
+# deal-update-form verifies with. Read from env only -- never hardcoded. When it's
+# unset the admin deal-link row is disabled rather than handing out a bad link.
+TRADE_UPDATE_SECRET = os.environ.get("FORM_HMAC_SECRET", "")
 
 
 def _deal_name(deal_id):
@@ -2722,13 +2725,14 @@ def render_send_link():
       </div>
       <div id="dl-out" class="sl-out">
         <div id="dl-who" style="font-weight:600; margin-bottom:6px;"></div>
-        <div class="sl-block">
+        <div class="sl-block" id="dl-update-block">
           <div class="sl-label">Update request form</div>
           <input id="dl-update" class="sl-url" readonly onclick="this.select()">
           <div class="sl-row">
             <button type="button" onclick="slCopy('dl-update')">Copy</button>
             <a id="dl-update-open" href="#" target="_blank" rel="noopener">Open in new tab &rarr;</a>
           </div>
+          <div id="dl-update-note" class="sl-note"></div>
         </div>
         <div class="sl-block" id="dl-loi-block">
           <div class="sl-label">LOI signing link</div>
@@ -2826,7 +2830,7 @@ def render_send_link():
         fetch('?view=deal_link_tokens&id=' + encodeURIComponent(id))
           .then(function (r) { return r.json(); })
           .then(function (d) {
-            if (!d || !d.update_url) { alert('Could not generate links.'); return; }
+            if (!d) { alert('Could not generate links.'); return; }
             var who = document.getElementById('dl-who');
             if (d.name) {
               who.textContent = d.name;
@@ -2835,8 +2839,21 @@ def render_send_link():
               who.textContent = 'No deal found with that ID — check before sending.';
               who.style.color = '#b45309';
             }
-            document.getElementById('dl-update').value = d.update_url;
-            document.getElementById('dl-update-open').href = d.update_url;
+            // No FORM_HMAC_SECRET on this Lambda -> the update row goes dead,
+            // same treatment as the LOI row below.
+            var ublock = document.getElementById('dl-update-block');
+            var unote = document.getElementById('dl-update-note');
+            if (d.update_url) {
+              ublock.classList.remove('sl-off');
+              document.getElementById('dl-update').value = d.update_url;
+              document.getElementById('dl-update-open').href = d.update_url;
+              unote.textContent = '';
+            } else {
+              ublock.classList.add('sl-off');
+              document.getElementById('dl-update').value = '';
+              document.getElementById('dl-update-open').href = '#';
+              unote.textContent = d.update_error || 'Update-form links are unavailable.';
+            }
             // No LOI secret on this Lambda means no signature we could trust, so the
             // row goes dead rather than handing over a link that would be rejected.
             var block = document.getElementById('dl-loi-block');
@@ -5665,7 +5682,10 @@ def _route(event, context):
         _dl_name = _deal_name(_dl_id) if _dl_id else ""
         _dl_q = urllib.parse.quote(_dl_id)
         _dl_update = (f"{TRADE_UPDATE_BASE}?deal_id={_dl_q}"
-                      f"&token={sign_id(TRADE_UPDATE_SECRET, _dl_id)}") if _dl_id else ""
+                      f"&token={sign_id(TRADE_UPDATE_SECRET, _dl_id)}") if (_dl_id and TRADE_UPDATE_SECRET) else ""
+        _dl_update_err = "" if TRADE_UPDATE_SECRET else (
+            "The FORM_HMAC_SECRET environment variable is not set on this Lambda, "
+            "so update-form links can't be signed here.")
         # Without the secret there is no signature to give, so the page is told to
         # disable the row instead of being handed a link the LOI lambda would reject.
         _dl_loi = (f"{LOI_SIGN_BASE}?deal_id={_dl_q}"
@@ -5676,6 +5696,7 @@ def _route(event, context):
         return {"statusCode": 200,
                 "headers": {"Content-Type": "application/json"},
                 "body": json.dumps({"name": _dl_name, "update_url": _dl_update,
+                                    "update_error": _dl_update_err,
                                     "loi_url": _dl_loi, "loi_error": _dl_err})}
     if qs.get("view") == "watchlist":
         return render_watchlist_builder(view_id)
