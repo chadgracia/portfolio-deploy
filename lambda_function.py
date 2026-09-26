@@ -1926,37 +1926,54 @@ def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist"
     .gg-unav {{
       display: flex;
       align-items: center;
-      flex-wrap: wrap;
-      gap: 16px;
+      flex-wrap: nowrap;
+      gap: 12px;
       padding: 10px 0;
       margin-bottom: 10px;
       border-bottom: 1px solid #ddd;
     }}
     .nav-brand {{
+      display: inline-block;
+      background-color: #eef2f6;
+      border: 1px solid #d7dee6;
+      border-radius: 999px;
+      padding: 7px 11px;
+      font-size: 13.5px;
       font-weight: 700;
-      font-size: 17px;
-      color: var(--ink);
+      color: #3d5a73;  /* literal: this page redefines --accent */
       text-decoration: none;
       white-space: nowrap;
+      flex-shrink: 0;
     }}
     .nav-tabs {{
       display: flex;
       align-items: center;
-      flex-wrap: wrap;
-      gap: 18px;
+      flex-wrap: nowrap;
+      gap: 6px;
       flex: 1;
+      min-width: 0;
     }}
     .nav-tab {{
       display: inline-block;
       background-color: #fff;
       border: 1px solid #ddd;
       border-radius: 999px;
-      padding: 8px 16px;
-      font-size: 14px;
+      padding: 7px 11px;
+      font-size: 13.5px;
       font-weight: 600;
       color: var(--ink);
       text-decoration: none;
       white-space: nowrap;
+    }}
+    /* 1120px, not 1000px: this nav sits inside .card's 40px padding. */
+    @media (max-width: 1120px) {{
+      .gg-unav {{
+        flex-wrap: wrap;
+      }}
+      .nav-tabs {{
+        flex-wrap: wrap;
+        min-width: auto;
+      }}
     }}
     .nav-tab:hover {{
       background-color: #f0f0f0;
