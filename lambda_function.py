@@ -1817,10 +1817,14 @@ def _render_unified_nav(client_id):
     dashboard_tab = ""
     try:
         if email and email.lower() in _syndicate_eligible_emails():
-            dashboard_tab = (
-                f'<a href="{html.escape(SYNDICATE_DASH_URL, quote=True)}" '
-                'target="_blank" rel="noopener" class="nav-tab">My Dashboard</a>'
-            )
+            # Signed SSO handoff, never the keyed admin URL. No secret -> no tab.
+            token = _make_handoff_token(email)
+            if token:
+                dash_href = f"{CLIENT_DASH_URL}&sso={urllib.parse.quote(token, safe='')}"
+                dashboard_tab = (
+                    f'<a href="{html.escape(dash_href, quote=True)}" '
+                    'target="_blank" rel="noopener" class="nav-tab">My Dashboard</a>'
+                )
     except Exception as e:
         print(f"Unified nav: My Dashboard tab failed (non-fatal): {e}")
         dashboard_tab = ""
@@ -2304,6 +2308,18 @@ def make_seller_token(auction_id):
 
 def verify_seller_token(auction_id, token):
     return hmac.compare_digest(make_seller_token(auction_id), token or "")
+
+
+def _make_handoff_token(email):
+    """Signed, 1-hour SSO handoff for the client dashboard: base64url(f"{email}|{exp}|{sig}"),
+    sig = HMAC-SHA256(IDENTITY_SECRET, f"{email}|{exp}").hexdigest(). Mirrors
+    chadgracia/trades. Returns "" when IDENTITY_SECRET is unset (callers fail closed)."""
+    if not (IDENTITY_SECRET and email):
+        return ""
+    exp = int(time.time()) + 3600
+    sig = hmac.new(IDENTITY_SECRET.encode(), f"{email}|{exp}".encode(),
+                   hashlib.sha256).hexdigest()
+    return _b64u(f"{email}|{exp}|{sig}".encode())
 
 
 def _verify_sso_handoff(token):
@@ -3035,6 +3051,8 @@ ADMIN_ALERTS_URL = ("https://3m3tx5bqrdvddzsyjitnjiipjy0hftoe.lambda-url.us-east
                     "?key=JK8h5Pq2L9aZ7rT3mN6bX")
 SYNDICATE_DASH_URL = ("https://ws4stw4iul75a7yx5dra2wmnq40kipav.lambda-url.us-east-1.on.aws/"
                       "?key=JK8h5Pq2L9aZ7rT3mN6bX")
+# Client-facing dashboard entry; the nav appends a signed &sso= handoff.
+CLIENT_DASH_URL = "https://desk.graciagroup.com/dashboard/?tab=overview"
 DEALS_KEY = "deals.json"
 SELL_ORDER_FIELD = "custom_label_1958"
 SELL_ORDER_OPTION_ID = 5011675
