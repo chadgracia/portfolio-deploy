@@ -5779,6 +5779,15 @@ def lambda_handler(event, context):
     Done here, once, rather than threaded through every render_* function — the bar
     is a property of the request, not of any particular page. Failures are swallowed:
     a missing bar must never cost the user their page."""
+    # Old Syndicate Dash address: permanent redirect to /blockbook, ahead of all
+    # other routing. Exact prefix only (/dashboards, /dashboard-x fall through).
+    raw_path = event.get("rawPath") or "/"
+    if raw_path == "/dashboard" or raw_path.startswith("/dashboard/"):
+        dest = "https://desk.graciagroup.com/blockbook" + raw_path[len("/dashboard"):]
+        qs = event.get("rawQueryString") or ""
+        if qs:
+            dest += "?" + qs
+        return {"statusCode": 301, "headers": {"Location": dest}, "body": ""}
     resp = _route(event, context)
     try:
         admin_id = read_admin_cookie(get_cookie(event, ADMIN_COOKIE_NAME))
