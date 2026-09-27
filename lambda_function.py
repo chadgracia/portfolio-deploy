@@ -1750,6 +1750,9 @@ def _fetch_demand_data():
     if (_demand_cache["data"] is not None
             and (now - _demand_cache["fetched_at"]) < _DEMAND_CACHE_TTL_SECONDS):
         return _demand_cache["data"]
+    if not SYNDICATE_DASH_URL:
+        print("Demand Board: ADMIN_KEY not set; skipping syndicate-dash fetch")
+        return None
     try:
         req = urllib.request.Request(SYNDICATE_DASH_URL + "&demand=list")
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -1770,6 +1773,10 @@ def _syndicate_eligible_emails():
     if _syndicate_tenant_cache["emails"] is not None:
         return _syndicate_tenant_cache["emails"]
     emails = set()
+    if not SYNDICATE_DASH_URL:
+        print("Unified nav: ADMIN_KEY not set; skipping syndicate tenants fetch")
+        _syndicate_tenant_cache["emails"] = emails
+        return emails
     try:
         req = urllib.request.Request(SYNDICATE_DASH_URL + "&tenants=list")
         with urllib.request.urlopen(req, timeout=3) as resp:
@@ -3047,10 +3054,15 @@ def _extend_auction(auc, days):
 ADMIN_BRIEF_URL = "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?key=alkj%2A707q235-qjdf"
 ADMIN_MAILER_URL = ADMIN_BRIEF_URL + "&view=mailer"
 ADMIN_PRICING_URL = "https://jw2kk4a73jbft32yf5lr7u22bm0bgkiy.lambda-url.us-east-1.on.aws/"
+# Shared admin key for deal-alerts and syndicate-dash, from the Lambda env.
+# Empty -> both URLs are "": server-side syndicate fetches fail soft and the
+# keyed admin-hub links are omitted.
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
+_ADMIN_KEY_QS = "?key=" + urllib.parse.quote(ADMIN_KEY, safe="")
 ADMIN_ALERTS_URL = ("https://3m3tx5bqrdvddzsyjitnjiipjy0hftoe.lambda-url.us-east-1.on.aws/"
-                    "?key=JK8h5Pq2L9aZ7rT3mN6bX")
+                    + _ADMIN_KEY_QS) if ADMIN_KEY else ""
 SYNDICATE_DASH_URL = ("https://ws4stw4iul75a7yx5dra2wmnq40kipav.lambda-url.us-east-1.on.aws/"
-                      "?key=JK8h5Pq2L9aZ7rT3mN6bX")
+                      + _ADMIN_KEY_QS) if ADMIN_KEY else ""
 # Client-facing dashboard entry; the nav appends a signed &sso= handoff.
 CLIENT_DASH_URL = "https://desk.graciagroup.com/dashboard/?tab=overview"
 DEALS_KEY = "deals.json"
@@ -3149,6 +3161,8 @@ def render_admin_hub():
     # Every tool opens in its own tab, so the hub stays put behind them.
     cards = ""
     for title, desc, href in tiles:
+        if not href:  # keyed link omitted when ADMIN_KEY is unset
+            continue
         cards += (f'<a class="hub-card" href="{html.escape(href, quote=True)}"'
                   f' target="_blank" rel="noopener">'
                   f'<div class="hub-title">{html.escape(title)}</div>'
@@ -3157,6 +3171,14 @@ def render_admin_hub():
     sellers = syndicator_eligible_sellers()
     seller_rows = ""
     for r in sellers[:50]:
+        if not SYNDICATE_DASH_URL:
+            seller_rows += (
+                '<li class="syn-row">'
+                f'<span class="syn-name">{html.escape(r["full_name"])}</span>'
+                f' &middot; <span class="syn-co">{html.escape(r["company_name"])}</span>'
+                '</li>'
+            )
+            continue
         my_deals_href = f"{SYNDICATE_DASH_URL}&view_as={urllib.parse.quote(r['email'])}"
         intros_href = my_deals_href + "&tab=intros"
         seller_rows += (
@@ -3170,7 +3192,8 @@ def render_admin_hub():
     syn_card = (
         '<div class="hub-card syn-card">'
         '<div class="hub-title">Syndicator Dashboard</div>'
-        f'<a href="{html.escape(SYNDICATE_DASH_URL, quote=True)}" target="_blank" rel="noopener">Open admin view</a>'
+        + (f'<a href="{html.escape(SYNDICATE_DASH_URL, quote=True)}" target="_blank" rel="noopener">Open admin view</a>'
+           if SYNDICATE_DASH_URL else '') +
         f'<p class="syn-count">{len(sellers)} sellers eligible</p>'
         f'<ul class="syn-list">{seller_rows}</ul>'
         '</div>'
