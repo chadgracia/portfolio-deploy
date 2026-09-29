@@ -5773,6 +5773,252 @@ def _viewing_as_bar(client_id):
             '<a href="?view=resume_admin">back to admin</a></div>')
 
 
+# Hidden static page at ?view=commission-tiers. Public (no cookie/token), not
+# linked from anywhere. Plain string, not an f-string: the CSS braces are literal.
+COMMISSION_TIERS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Client Commission Tiers — Chad Gracia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: two letter-size sheets on a document-viewer grey, set like a formal client memo */
+:root {
+  --desk: #e6e8eb;
+  --paper: #ffffff;
+  --ink: #16202b;
+  --muted: #5b6673;
+  --rule: #e2e6ea;
+  --navy: #1d3a5c;
+  --check: #2e7d4f;
+  --open: #aab3bd;
+  --tint: #f5f7f9;
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --sans: "IBM Plex Sans", -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--desk); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.55; }
+.viewer { padding-inline: 16px; padding-block: 32px 48px; display: flex; flex-direction: column; align-items: center; gap: 28px; }
+.sheet { background: var(--paper); width: 100%; max-width: 816px; min-height: 1056px; box-shadow: 0 1px 3px rgba(20,30,45,.12), 0 8px 24px rgba(20,30,45,.10); padding-inline: clamp(24px, 8vw, 72px); padding-block: 56px 40px; display: flex; flex-direction: column; gap: 32px; }
+.sheet-body { display: flex; flex-direction: column; gap: 32px; flex: 1; }
+.head { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); border-bottom: 2px solid var(--navy); padding-bottom: 10px; }
+.head b { color: var(--navy); font-weight: 600; }
+.foot { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 10px; font-variant-numeric: tabular-nums; }
+h1, h2 { font-family: var(--serif); font-weight: 600; text-wrap: balance; color: var(--ink); margin: 0; }
+h1 { font-size: clamp(28px, 5vw, 36px); line-height: 1.15; }
+h2 { font-size: 21px; line-height: 1.25; }
+p { margin: 0; max-width: 68ch; }
+.stack { display: flex; flex-direction: column; gap: 12px; }
+.lede { font-family: var(--serif); font-size: 18px; line-height: 1.6; }
+.sig { font-family: var(--serif); font-style: italic; color: var(--muted); }
+.eyebrow { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+
+ul.checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border-top: 1px solid var(--rule); }
+ul.checks li { display: grid; grid-template-columns: 26px 1fr; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--rule); align-items: start; }
+ul.checks li > div { min-width: 0; }
+.note { display: block; font-size: 13px; color: var(--muted); }
+.mark { width: 20px; height: 20px; margin-top: 2px; border-radius: 50%; display: grid; place-items: center; }
+.mark.on { background: var(--check); }
+.mark.on svg { width: 12px; height: 12px; fill: none; stroke: var(--paper); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.mark.off { border: 2px solid var(--open); }
+
+.tiers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+@media (max-width: 640px) { .tiers { grid-template-columns: 1fr; } }
+.tier { border: 1px solid var(--rule); border-radius: 4px; padding: 18px; display: flex; flex-direction: column; gap: 8px; }
+.tier .name { font-family: var(--serif); font-size: 19px; font-weight: 600; }
+.tier .pct { font-family: var(--mono); font-size: 24px; color: var(--navy); font-weight: 500; line-height: 1.1; }
+.tier .pct small { font-family: var(--sans); font-size: 12px; color: var(--muted); font-weight: 400; }
+.tier ul { margin: 0; padding-left: 16px; font-size: 14px; display: flex; flex-direction: column; gap: 5px; }
+.tier .req { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+
+.twotables { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 28px; }
+@media (max-width: 640px) { .twotables { grid-template-columns: 1fr; } }
+.tablebox { overflow-x: auto; display: flex; flex-direction: column; gap: 8px; }
+.tablebox .cap { font-size: 12px; font-weight: 600; color: var(--navy); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 10px 7px 0; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+td.num, th.num { text-align: right; font-family: var(--mono); padding-right: 0; padding-left: 10px; }
+tr.base td { font-weight: 600; }
+
+.status { background: var(--tint); border: 1px solid var(--rule); border-radius: 4px; padding: 22px; display: flex; flex-direction: column; gap: 14px; }
+.status-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+.status-head .who { font-family: var(--serif); font-size: 19px; font-weight: 600; }
+.pill { font-size: 12px; font-weight: 600; color: var(--navy); border: 1px solid var(--navy); border-radius: 999px; padding: 2px 11px; }
+.sample { font-size: 11px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
+.status ul.checks, .status ul.checks li { border-color: #dde2e7; }
+.next { font-size: 14px; }
+.next b { color: var(--navy); }
+
+.fine { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 8px; }
+.fine p { max-width: none; }
+.disc { font-size: 10.5px; line-height: 1.5; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 14px; display: flex; flex-direction: column; gap: 7px; }
+.disc p { max-width: none; }
+.disc .h { font-weight: 600; letter-spacing: .06em; color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="viewer">
+
+  <!-- Page 1 -->
+  <article class="sheet">
+    <div class="sheet-body">
+      <section class="stack">
+        <h1>Client Commission Tiers</h1>
+        <p class="lede">For years, I've reduced commissions for clients who make transactions smooth for everyone involved. To make that process fair and consistent, I've written down what goes into the decision.</p>
+        <p>As always, every trade and commission goes through Rainmaker Securities, LLC and is documented on Rainmaker's forms. The criteria below are the same for every client. <strong>These reductions apply only to trades handled by Chad Gracia, a registered representative of Rainmaker Securities, LLC. They do not apply to trades with any other Rainmaker representative, and they do not change any other agreement you have with Rainmaker.</strong></p>
+        <p class="sig">— Chad Gracia</p>
+      </section>
+
+      <section class="stack">
+        <div class="eyebrow">Required for every tier</div>
+        <h2>Good standing</h2>
+        <p>These are the basics that let sellers take an introduction seriously. Many are required by Rainmaker before any work can be done on your behalf or introductions made. New clients start in good standing on everything except the two forms.</p>
+        <ul class="checks">
+          <li><span class="mark on"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 5"/></svg></span><div>Identity and compliance forms complete</div></li>
+          <li><span class="mark on"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 5"/></svg></span><div>Investor qualification on file</div></li>
+          <li><span class="mark on"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 5"/></svg></span><div>Honors agreed terms through closing<span class="note">Price, size and commission stay as agreed once terms are set.</span></div></li>
+          <li><span class="mark on"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 5"/></svg></span><div>Meets all payment deadlines<span class="note">Both the investment and the commission.</span></div></li>
+          <li><span class="mark on"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 5"/></svg></span><div>Responds promptly after an introduction<span class="note">A reply to the seller within 3 business days. A clear "pass" counts as a reply.</span></div></li>
+        </ul>
+      </section>
+
+      <section class="stack">
+        <div class="eyebrow">Reductions from the original commission</div>
+        <h2>Three tiers</h2>
+        <div class="tiers">
+          <div class="tier">
+            <div class="name">Preferred</div>
+            <div class="pct">10% <small>off</small></div>
+            <div class="req">Requires</div>
+            <ul>
+              <li>Good standing</li>
+              <li>Introduced another new accredited investor who completed onboarding with Rainmaker</li>
+            </ul>
+            <div class="req">Includes</div>
+            <ul>
+              <li>A 30-minute strategy call on your goals and how I can help</li>
+            </ul>
+          </div>
+          <div class="tier">
+            <div class="name">Gold</div>
+            <div class="pct">15% <small>off</small></div>
+            <div class="req">Requires</div>
+            <ul>
+              <li>Good standing</li>
+              <li>$5M or more in completed trades</li>
+            </ul>
+            <div class="req">Includes</div>
+            <ul>
+              <li>Early look at new blocks</li>
+              <li>Strategy calls whenever you need them</li>
+            </ul>
+          </div>
+          <div class="tier">
+            <div class="name">Platinum</div>
+            <div class="pct">20% <small>off</small></div>
+            <div class="req">Requires</div>
+            <ul>
+              <li>Good standing</li>
+              <li>$10M or more in completed trades, or 3 or more trades</li>
+            </ul>
+            <div class="req">Includes</div>
+            <ul>
+              <li>Everything in Gold</li>
+              <li>When you ask me to find a specific position, I won't offer what I find to my other buyers for 30 days</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </div>
+    <div class="foot"><span>Client Commission Tiers · September 2026</span><span>Page 1 of 2</span></div>
+  </article>
+
+  <!-- Page 2 -->
+  <article class="sheet">
+    <div class="sheet-body">
+      <section class="stack">
+        <div class="eyebrow">Worked example</div>
+        <h2>A $2M purchase</h2>
+        <p>Reductions apply only to trades handled by Chad Gracia through Rainmaker Securities, LLC.</p>
+        <div class="twotables">
+          <div class="tablebox">
+            <div class="cap">Usual commission</div>
+            <table>
+              <thead><tr><th>Transaction size</th><th class="num">Rate</th></tr></thead>
+              <tbody>
+                <tr><td>Up to $1M</td><td class="num">5.0%</td></tr>
+                <tr><td>$1M – $5M</td><td class="num">4.0%</td></tr>
+                <tr><td>$5M – $10M</td><td class="num">3.5%</td></tr>
+                <tr><td>Over $10M</td><td class="num">2.5%</td></tr>
+              </tbody>
+            </table>
+            <p class="note">Each deal's commission is set in its agreement with the seller and may differ from these.</p>
+          </div>
+          <div class="tablebox">
+            <div class="cap">On a $2M purchase</div>
+            <table>
+              <thead><tr><th>Status</th><th class="num">Rate</th><th class="num">Commission</th><th class="num">Savings</th></tr></thead>
+              <tbody>
+                <tr class="base"><td>Original commission</td><td class="num">4.00%</td><td class="num">$80,000</td><td class="num">—</td></tr>
+                <tr><td>Preferred</td><td class="num">3.60%</td><td class="num">$72,000</td><td class="num">$8,000</td></tr>
+                <tr><td>Gold</td><td class="num">3.40%</td><td class="num">$68,000</td><td class="num">$12,000</td></tr>
+                <tr><td>Platinum</td><td class="num">3.20%</td><td class="num">$64,000</td><td class="num">$16,000</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="stack">
+        <div class="status">
+          <div class="status-head">
+            <span class="who">Sample status</span>
+            <span class="pill">Preferred</span>
+          </div>
+          <ul class="checks">
+            <li><span class="mark on"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 5"/></svg></span><div>Identity and compliance forms complete</div></li>
+            <li><span class="mark on"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 5"/></svg></span><div>Investor qualification on file</div></li>
+            <li><span class="mark on"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 5"/></svg></span><div>Honors agreed terms through closing</div></li>
+            <li><span class="mark on"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 5"/></svg></span><div>Meets all payment deadlines</div></li>
+            <li><span class="mark on"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 5"/></svg></span><div>Responds promptly after an introduction</div></li>
+            <li><span class="mark on"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 5"/></svg></span><div>Introduced a new accredited investor<span class="note">1 completed onboarding with Rainmaker</span></div></li>
+            <li><span class="mark on"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 5"/></svg></span><div>Completed trades</div></li>
+          </ul>
+          <p class="next">See something that looks wrong? Reply to any of my emails and I'll correct it.</p>
+        </div>
+      </section>
+
+      <section class="fine">
+        <p>An introduced investor counts once they complete onboarding with Rainmaker and are verified as accredited or higher. Introductions of household members, related entities or colleagues at the same firm don't count.</p>
+        <p>Each deal's commission is set in Rainmaker's agreement with the seller and is usually built into the purchase price. Reductions apply only to Rainmaker commissions on trades handled by Chad Gracia and are confirmed in writing with the seller through a revised commission schedule or side letter, which lowers the price you pay without changing the seller's proceeds. They do not apply to trades with other Rainmaker representatives.</p>
+        <p>Before or after introducing you to a seller, I may mention which good-standing items you've completed and whether you've completed trades with me, as sellers often ask about these when deciding on allocations. I never share trade sizes, referral information or anything else about your account.</p>
+      </section>
+
+      <section class="disc">
+        <p>DISCLOSURE: Chad Gracia ("Gracia") is a principal of The Gracia Group, Inc. ("Gracia Group") and a registered agent of Rainmaker Securities, LLC ("RMS"). Gracia Group is a consulting firm and outside business activity of Gracia. Gracia Group is not affiliated with RMS. RMS is a FINRA registered broker-dealer and SIPC member. Find this broker-dealer and its agents on BrokerCheck. Our relationship summary can be found on the RMS website. All securities transactions conducted by Chad Gracia will be conducted via RMS.</p>
+        <p>RMS is engaged by its clients to make referrals to buyers or sellers of private securities ("Securities"). If such client closes a Securities transaction with a buyer or seller so referred, RMS is entitled to a success fee from the client. Such success fee may be in the form of cash or in warrants to purchase securities of the client or client's affiliate. RMS or RMS representatives may hold equity in its issuer clients or in the issuers of securities purchased or sold by the parties to a transaction.</p>
+        <p>This communication is confidential and is addressed only to its intended recipient. This communication does not represent an offer or solicitation to buy or sell Securities. Such an offer must be made via definitive legal documentation by the seller of securities. RMS does not recommend the purchase or sale of Securities. Potential buyers or sellers of the Securities should seek professional counsel prior to entering into any transaction.</p>
+        <p class="h">RISK FACTORS</p>
+        <p>Investments in the Securities are speculative and involve a high degree of risk. Companies engaging in private placements may be early stage and high risk. You should be able to afford the increased risk of loss with such investments, including the potential of a total loss. An investor in the Securities should have little to no need for liquidity in the foreseeable future. Unlike an investment purchased on a stock exchange, an investment in a private placement is highly illiquid. You will most likely be investing in restricted securities, may have difficulty finding a buyer for the securities when you can resell and, as a result, may need to hold the securities indefinitely.</p>
+        <p>Limited disclosure information. Companies engaging in private placements are not required to provide the disclosure that would be required in a registered offering. You may have less information to make an informed investment decision than, for example, stock purchased on a stock exchange, including information that may help you determine whether the price asked for the investment is a fair price.</p>
+      </section>
+    </div>
+    <div class="foot"><span>Client Commission Tiers · September 2026</span><span>Page 2 of 2</span></div>
+  </article>
+
+</div>
+</body>
+</html>
+"""
+
+
 def lambda_handler(event, context):
     """Thin shell around _route: renders the "viewing as" bar whenever the browser
     carries a valid admin cookie but the session cookie points at somebody else.
@@ -5788,6 +6034,15 @@ def lambda_handler(event, context):
         if qs:
             dest += "?" + qs
         return {"statusCode": 301, "headers": {"Location": dest}, "body": ""}
+    # Hidden static page: served before any session/magic-link/admin handling and
+    # before the viewing-as bar, so no cookie is read or set. GET only.
+    method = (event.get("requestContext", {}).get("http", {}).get("method") or "GET").upper()
+    if method == "GET" and (event.get("queryStringParameters") or {}).get("view") == "commission-tiers":
+        return {"statusCode": 200,
+                "headers": {"Content-Type": "text/html; charset=utf-8",
+                            "Cache-Control": "max-age=300",
+                            "X-Robots-Tag": "noindex, nofollow"},
+                "body": COMMISSION_TIERS_HTML}
     resp = _route(event, context)
     try:
         admin_id = read_admin_cookie(get_cookie(event, ADMIN_COOKIE_NAME))
