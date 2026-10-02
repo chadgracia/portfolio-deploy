@@ -1727,6 +1727,7 @@ _VIEW_META = {
     "auction_seller": ("📄", "Order Book · Gracia Group"),
     "sendlink": ("🚀", "Send a Link · GG Admin"),
     "demand": ("🗂️", "Demand Board · Gracia Group"),
+    "profile": ("👤", "Profile · Gracia Group"),
 }
 
 # ── Unified top nav (same structure/styling as chadgracia/trades and
@@ -1762,6 +1763,39 @@ def _fetch_demand_data():
         return None
     _demand_cache["data"] = data
     _demand_cache["fetched_at"] = now
+    return data
+
+
+# Client standing (commission tier) straight from syndicate-dash's admin-gated
+# &view=standing_json route -- computed there, never here. Cached per request only:
+# lambda_handler clears this at the start of every invocation, so the Profile page
+# and the watchlist link share one fetch without ever serving stale standing.
+_standing_cache = {}
+
+
+def _fetch_standing(person_id):
+    """The client's standing dict when syndicate-dash says visible:true, else None.
+    Fail-soft: missing key, timeout, bad JSON, empty or visible:false -> None."""
+    pid = str(person_id or "").strip()
+    if not pid:
+        return None
+    if pid in _standing_cache:
+        return _standing_cache[pid]
+    data = None
+    if SYNDICATE_DASH_URL:
+        try:
+            req = urllib.request.Request(SYNDICATE_DASH_URL + "&view=standing_json&pid="
+                                         + urllib.parse.quote(pid, safe=""))
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                raw = resp.read().decode()
+            parsed = json.loads(raw) if raw.strip() else None
+            if isinstance(parsed, dict) and parsed.get("visible") is True:
+                data = parsed
+        except Exception as e:
+            print(f"Standing: fetch failed (non-fatal): {e}")
+    else:
+        print("Standing: ADMIN_KEY not set; skipping syndicate-dash fetch")
+    _standing_cache[pid] = data
     return data
 
 
@@ -1841,7 +1875,7 @@ def _render_unified_nav(client_id):
         '<span class="navacct-trigger">My Account &#9662;</span>'
         '<div class="navacct-menu">'
         f'<div class="navacct-item navacct-static">Signed in as {who}</div>'
-        '<div class="navacct-item navacct-disabled" title="Coming soon">Profile &mdash; coming soon</div>'
+        '<a class="navacct-item" href="?view=profile">Profile</a>'
         '<a class="navacct-item" href="?signout=1">Sign out</a>'
         '</div></div>'
     )
@@ -1870,7 +1904,7 @@ def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist"
     # legacy topnav, since the unified nav above already has its own brand link
     # and Indications tab; every other caller (admin views, send-a-link) keeps
     # the legacy topnav exactly as before, unchanged.
-    if view in ("watchlist_status", "watchlist", "holdings", "auction", "auction_list", "demand"):
+    if view in ("watchlist_status", "watchlist", "holdings", "auction", "auction_list", "demand", "profile"):
         topnav = _render_desk_subnav(view, is_admin)
     else:
         topnav = TOPNAV_ADMIN_HTML if is_admin else TOPNAV_HTML
@@ -3956,6 +3990,119 @@ def render_auction_list(client_id, is_admin):
     return html_response(body, is_admin=is_admin, view="auction_list", client_id=client_id)
 
 
+# The commission-tiers page's checklist styling (green tick, rules, status box),
+# scoped under .cts so it can't touch the desk shell's own h1/p/table rules.
+_CTS_CSS = """
+  .cts { --ink: #16202b; --muted: #5b6673; --rule: #e2e6ea; --navy: #1d3a5c;
+         --check: #2e7d4f; --tint: #f5f7f9; --paper: #ffffff;
+         --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+         --sans: "IBM Plex Sans", -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+         font-family: var(--sans); font-size: 15px; line-height: 1.55; color: var(--ink);
+         margin-top: 18px; }
+  .cts p { margin: 0; max-width: 68ch; }
+  .cts a { color: var(--navy); }
+  .cts ul.checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border-top: 1px solid var(--rule); }
+  .cts ul.checks li { display: grid; grid-template-columns: 26px 1fr; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--rule); align-items: start; }
+  .cts ul.checks li > div { min-width: 0; }
+  .cts .note { display: block; font-size: 13px; color: var(--muted); }
+  .cts .mark { width: 20px; height: 20px; margin-top: 2px; border-radius: 50%; display: grid; place-items: center; }
+  .cts .mark.on { background: var(--check); }
+  .cts .mark.on svg { width: 12px; height: 12px; fill: none; stroke: var(--paper); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+  .cts .status { background: var(--tint); border: 1px solid var(--rule); border-radius: 4px; padding: 22px; display: flex; flex-direction: column; gap: 14px; }
+  .cts .status-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+  .cts .status-head .who { font-family: var(--serif); font-size: 19px; font-weight: 600; }
+  .cts .pill { font-size: 12px; font-weight: 600; color: var(--navy); border: 1px solid var(--navy); border-radius: 999px; padding: 2px 11px; }
+  .cts .next { font-size: 14px; }
+  .cts .next b { color: var(--navy); }
+  .cts .who-line { font-size: 14px; color: var(--muted); }
+"""
+
+_CTS_TICK = '<span class="mark on"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 5"/></svg></span>'
+
+
+def _safe_href(url):
+    """Only plain http(s) links make it into the page; anything else is dropped."""
+    url = str(url or "").strip()
+    if url.lower().startswith(("https://", "http://")):
+        return html.escape(url, quote=True)
+    return ""
+
+
+def render_profile(client_id, is_admin):
+    """Signed-in client's Profile: who they're signed in as plus a 'Your client
+    status' card from syndicate-dash's standing_json. Standing is never computed
+    here; with no visible standing (or any error) the client sees one soft line."""
+    email = ""
+    try:
+        rec = lookup_person(client_id)
+        if rec.get("found"):
+            email = (rec.get("email") or "").strip()
+    except Exception as e:
+        print(f"Profile: person lookup failed (non-fatal): {e}")
+    who = html.escape(email) if email else html.escape(display_name(client_id))
+
+    card = ""
+    try:
+        st = _fetch_standing(client_id)
+        if st:
+            tier_label = str(st.get("tier_label") or st.get("tier") or "").strip()
+            if st.get("tier"):
+                pill = html.escape(tier_label)
+                try:
+                    pct = float(st.get("discount_pct"))
+                    pct_txt = f"{pct:g}"
+                except (TypeError, ValueError):
+                    pct_txt = ""
+                headline = (f'<p class="next"><b>{html.escape(pct_txt)}% off</b> my standard commission</p>'
+                            if pct_txt else "")
+            elif st.get("good_standing"):
+                pill, headline = "Good standing", ""
+            else:
+                pill, headline = "Working toward Preferred", ""
+            lis = ""
+            for it in (st.get("items") or []):
+                if not isinstance(it, dict):
+                    continue
+                label = html.escape(str(it.get("label") or ""))
+                note = html.escape(str(it.get("note") or ""))
+                href = _safe_href(it.get("form_url"))
+                extra = ""
+                if note:
+                    extra += f'<span class="note">{note}</span>'
+                if href:
+                    extra += (f'<span class="note"><a href="{href}" target="_blank" '
+                              'rel="noopener">Complete this form</a></span>')
+                mark = _CTS_TICK if it.get("done") else '<span></span>'
+                lis += f'<li>{mark}<div>{label}{extra}</div></li>'
+            tiers_href = _safe_href(st.get("tiers_url"))
+            card = (
+                '<div class="status">'
+                '<div class="status-head"><span class="who">Your client status</span>'
+                f'<span class="pill">{pill}</span></div>'
+                + headline
+                + (f'<ul class="checks">{lis}</ul>' if lis else "")
+                + (f'<p class="next"><a href="{tiers_href}" target="_blank" rel="noopener">'
+                   'How client tiers work</a></p>' if tiers_href else "")
+                + '</div>'
+            )
+    except Exception as e:
+        print(f"Profile: standing render failed (non-fatal): {e}")
+        card = ""
+    if not card:
+        card = ('<p>Your client status will appear here soon. Questions? Email '
+                '<a href="mailto:cgracia@rainmakersecurities.com">cgracia@rainmakersecurities.com</a>.</p>')
+
+    body = f"""
+    <style>{_CTS_CSS}</style>
+    <h1>Profile</h1>
+    <div class="cts">
+      <p class="who-line" style="margin-bottom:14px;">Signed in as {who}</p>
+      {card}
+    </div>
+    """
+    return html_response(body, is_admin=is_admin, view="profile", client_id=client_id)
+
+
 def render_live_auctions_overview(client_id):
     """Client-facing sibling of render_auction: every currently live auction,
     same _auction_is_live rule the unified nav's Auctions tab uses, with no
@@ -5082,6 +5229,15 @@ def render_watchlist_status(client_id, is_admin=False):
                 '<a class="btn-secondary" href="?view=watchlist">+ Build your watchlist</a>'
                 '</div>')
 
+    status_link = ""
+    try:
+        if _fetch_standing(client_id):
+            status_link = ('<p style="text-align:right; font-size:13px; margin-bottom:6px;">'
+                           '<a href="?view=profile" style="color:var(--ink);">'
+                           'Your client status &rarr;</a></p>')
+    except Exception as e:
+        print(f"watchlist status: standing link skipped: {e}")
+
     return html_response(f"""
     <style>
       .wl-wrap {{ overflow-x: auto; }}
@@ -5136,7 +5292,7 @@ def render_watchlist_status(client_id, is_admin=False):
     <style>
       .wl-spacer {{ display: none; }}
     </style>
-    {body}
+    {status_link}{body}
     """, is_admin=is_admin, view="watchlist_status", client_id=client_id)
 
 
@@ -5708,6 +5864,8 @@ def _route(event, context):
         return render_auction_list(view_id, effective_admin)
     if qs.get("view") == "demand":
         return render_demand_board(view_id, effective_admin)
+    if qs.get("view") == "profile":
+        return render_profile(view_id, effective_admin)
     if qs.get("view") == "admin" and is_admin:
         return render_admin_hub()
     if qs.get("view") == "auctions" and is_admin:
@@ -6027,6 +6185,7 @@ def lambda_handler(event, context):
     a missing bar must never cost the user their page."""
     # Old Syndicate Dash address: permanent redirect to /blockbook, ahead of all
     # other routing. Exact prefix only (/dashboards, /dashboard-x fall through).
+    _standing_cache.clear()
     raw_path = event.get("rawPath") or "/"
     if raw_path == "/dashboard" or raw_path.startswith("/dashboard/"):
         dest = "https://desk.graciagroup.com/blockbook" + raw_path[len("/dashboard"):]
