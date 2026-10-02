@@ -1726,6 +1726,7 @@ _VIEW_META = {
     "auction_list": ("⏱️", "Auctions · Gracia Group"),
     "auction_seller": ("📄", "Order Book · Gracia Group"),
     "sendlink": ("🚀", "Send a Link · GG Admin"),
+    "engagement": ("📝", "Engagement Docs · GG Admin"),
     "demand": ("🗂️", "Demand Board · Gracia Group"),
     "profile": ("👤", "Profile · Gracia Group"),
 }
@@ -3369,6 +3370,9 @@ def render_admin_hub():
          "https://izahxskgeee5mihwi7y62v333q0ajkji.lambda-url.us-east-1.on.aws/?key=Vq83RkPnZ2wYhT6d"),
         ("News mailer composer", "Compose and send the company news mailer.",
          "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?view=news&key=alkj%2A707q235-qjdf"),
+        ("Engagement Docs", "Sell-side agreement and Schedule A, prefilled from a deal "
+                            "or person. Preview only for now.",
+         "?view=engagement"),
     ]
     # Every tool opens in its own tab, so the hub stays put behind them.
     cards = ""
@@ -3434,6 +3438,597 @@ def render_admin_hub():
     <p class="sub">Internal tools. Nothing here is visible to clients.</p>
     <div class="hub-grid">{cards}{syn_card}</div>
     """, eyebrow="Admin", is_admin=True, view="admin")
+
+
+# ── Engagement Docs (?view=engagement) — phase 1, READ-ONLY ──────────────────────
+# Admin-only form + live preview for the sell-side agent agreement / Schedule A.
+# Reads deals.json + companies.json from the CRM snapshot via the same _wl_json path
+# the auction prefill uses, cached on the warm instance. Makes NO writes of any kind:
+# no Pipeline API, no S3 put, no Drive, no email.
+ENG_SELLER_LEGAL_FIELD  = "custom_label_3064355"   # Deal: Seller Legal Name
+ENG_STRUCTURE_FIELD     = "custom_label_3064360"   # Deal: Structure (single id or list)
+ENG_COMPANY_LEGAL_FIELD = "custom_label_3769275"   # Company: Legal Name
+ENG_MIN_SIZE_FIELD      = "custom_label_3065488"
+ENG_MAX_SIZE_FIELD      = "custom_label_3064645"
+ENG_BUY_ORDER_OPTION_ID = 5077819                  # custom_label_1958 Buy Order
+ENG_STRUCTURE_LABELS    = {6250090: "Direct", 5077906: "SPV", 5077903: "Forward"}
+ENG_CLOSED_STAGES       = {"won", "lost", "obsolete", "trade broken"}
+ENG_PEOPLE_SLIM_BUCKET  = "syndicate-dash"
+ENG_PEOPLE_SLIM_KEY     = "people-slim.json"
+ENG_CACHE_SECONDS       = 600
+ENG_MAX_PAYLOAD_BYTES   = 4_000_000                # Function URL responses cap at 6 MB
+
+_eng_cache = {"ts": 0.0, "data": None}
+_eng_people_slim_cache = None   # (list_of_[id, name, company], note); set on first use
+
+
+def _eng_stage_name(deal):
+    for key in ("deal_stage", "stage"):
+        v = deal.get(key)
+        if isinstance(v, dict):
+            return (v.get("name") or "").strip()
+        if isinstance(v, str):
+            return v.strip()
+    return ""
+
+
+def _eng_size(cf, deal):
+    """Deal size label from Max Size (else Min Size, else the deal value)."""
+    v = None
+    for raw in (cf.get(ENG_MAX_SIZE_FIELD), cf.get(ENG_MIN_SIZE_FIELD), deal.get("value")):
+        if isinstance(raw, list):
+            raw = raw[0] if raw else None
+        v = _auc_num(raw)
+        if v:
+            break
+    if not v:
+        return ""
+    if v >= 1_000_000:
+        return f"${v / 1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
+    if v >= 1_000:
+        return f"${v / 1_000:.0f}K"
+    return f"${v:,.0f}"
+
+
+def _eng_person_name(p):
+    full = (p.get("full_name") or p.get("name") or "").strip()
+    if not full:
+        full = " ".join(x for x in [(p.get("first_name") or "").strip(),
+                                    (p.get("last_name") or "").strip()] if x)
+    return full
+
+
+def _eng_person_company(p):
+    """(company_id_str, company_name) for an embedded Pipeline person record."""
+    co = p.get("company") if isinstance(p.get("company"), dict) else {}
+    cid = co.get("id") or p.get("company_id")
+    name = (co.get("name") or p.get("company_name") or "").strip()
+    return (str(cid) if cid else ""), name
+
+
+def _eng_people_slim():
+    """People for name search from s3://syndicate-dash/people-slim.json, cached on the
+    warm instance. Accepted only if records carry a name and a company field. Returns
+    (rows, note); rows is None when the file is unreadable or unusable."""
+    global _eng_people_slim_cache
+    if _eng_people_slim_cache is not None:
+        return _eng_people_slim_cache
+    try:
+        obj = boto3.client("s3").get_object(Bucket=ENG_PEOPLE_SLIM_BUCKET, Key=ENG_PEOPLE_SLIM_KEY)
+        data = json.loads(obj["Body"].read())
+    except Exception as e:
+        print(f"engagement: people-slim unavailable: {e}")
+        _eng_people_slim_cache = (None, f"people-slim.json not readable ({type(e).__name__})")
+        return _eng_people_slim_cache
+    recs = data.get("people", []) if isinstance(data, dict) else (data or [])
+    rows, with_co = [], 0
+    for p in recs if isinstance(recs, list) else []:
+        if not isinstance(p, dict) or p.get("id") is None:
+            continue
+        name = _eng_person_name(p)
+        if not name:
+            continue
+        cid, co = _eng_person_company(p)
+        if co:
+            with_co += 1
+        rows.append([str(p["id"]), name, co, cid])
+    if not rows or not with_co:
+        _eng_people_slim_cache = (None, "people-slim.json has no usable name + company fields")
+    else:
+        _eng_people_slim_cache = (rows, "people-slim.json")
+    return _eng_people_slim_cache
+
+
+def _engagement_data():
+    """Slim payload for the form, cached for ENG_CACHE_SECONDS on the warm instance."""
+    now = time.time()
+    if _eng_cache["data"] is not None and now - _eng_cache["ts"] < ENG_CACHE_SECONDS:
+        return _eng_cache["data"]
+
+    raw_cos = (_wl_json(COMPANIES_BUCKET, COMPANIES_KEY, {}) or {}).get("companies") or []
+    co_by_id = {}
+    companies = []
+    for c in raw_cos:
+        if not isinstance(c, dict) or c.get("id") is None:
+            continue
+        name = (c.get("name") or "").strip()
+        legal = ((c.get("custom_fields") or {}).get(ENG_COMPANY_LEGAL_FIELD) or "")
+        legal = legal.strip() if isinstance(legal, str) else ""
+        co_by_id[str(c["id"])] = (name, legal)
+        if name and not name.endswith("$"):
+            companies.append([str(c["id"]), name, legal])
+    companies.sort(key=lambda r: r[1].lower())
+
+    try:
+        idx = _people_index().get("by_id", {}) or {}
+    except Exception:
+        idx = {}
+
+    raw_deals = (_wl_json(COMPANIES_BUCKET, DEALS_KEY, {}) or {}).get("deals") or []
+    deals, deal_people = [], {}
+    for d in raw_deals:
+        if not isinstance(d, dict) or d.get("id") is None:
+            continue
+        if _eng_stage_name(d).lower() in ENG_CLOSED_STAGES:
+            continue
+        cf = d.get("custom_fields") or {}
+        co = d.get("company") if isinstance(d.get("company"), dict) else {}
+        co_id = str(co.get("id") or d.get("company_id") or "")
+        co_name = (co.get("name") or "").strip() or co_by_id.get(co_id, ("", ""))[0]
+        side_ids = _deal_cf_option_ids(d, SELL_ORDER_FIELD)
+        side = ("Sell" if SELL_ORDER_OPTION_ID in side_ids
+                else "Buy" if ENG_BUY_ORDER_OPTION_ID in side_ids else "")
+        seller_legal = cf.get(ENG_SELLER_LEGAL_FIELD) or ""
+        seller_legal = seller_legal.strip() if isinstance(seller_legal, str) else ""
+        structs = []
+        for oid in cf_id_list(cf.get(ENG_STRUCTURE_FIELD)):
+            lab = ENG_STRUCTURE_LABELS.get(oid)
+            if lab and lab not in structs:
+                structs.append(lab)
+        people, seen = [], set()
+        embedded = d.get("people") if isinstance(d.get("people"), list) else []
+        for p in embedded:
+            if not isinstance(p, dict) or p.get("id") is None or str(p["id"]) in seen:
+                continue
+            pid = str(p["id"])
+            seen.add(pid)
+            name = _eng_person_name(p) or (idx.get(pid) or {}).get("name", "")
+            if not name:
+                continue
+            pcid, pco = _eng_person_company(p)
+            people.append([pid, name, pco, pcid])
+        for pid in _deal_linked_person_ids(d):
+            pid = str(pid)
+            if pid in seen:
+                continue
+            seen.add(pid)
+            name = ((idx.get(pid) or {}).get("name") or "").strip()
+            if name:
+                people.append([pid, name, "", ""])
+        for row in people:
+            deal_people.setdefault(row[0], row)
+        deals.append({"id": str(d["id"]), "co": co_name, "coId": co_id,
+                      "il": co_by_id.get(co_id, ("", ""))[1], "side": side,
+                      "size": _eng_size(cf, d), "sl": seller_legal, "st": structs,
+                      "stage": _eng_stage_name(d), "pp": people})
+    deals.sort(key=lambda r: (0 if r["side"] == "Sell" else 1, r["co"].lower()))
+
+    slim_rows, slim_note = _eng_people_slim()
+    if slim_rows:
+        people, source = slim_rows, "people-slim.json"
+    else:
+        people = sorted(deal_people.values(), key=lambda r: r[1].lower())
+        source = f"people linked to deals in deals.json ({slim_note})"
+
+    data = {"deals": deals, "companies": companies, "people": people,
+            "source": source,
+            "counts": {"deals_total": len(raw_deals), "deals_live": len(deals),
+                       "companies": len(companies), "people": len(people)}}
+    if slim_rows and len(json.dumps(data, separators=(",", ":"))) > ENG_MAX_PAYLOAD_BYTES:
+        people = sorted(deal_people.values(), key=lambda r: r[1].lower())
+        data["people"] = people
+        data["counts"]["people"] = len(people)
+        data["source"] = "people linked to deals in deals.json (people-slim.json too large to embed)"
+    _eng_cache.update(ts=now, data=data)
+    return data
+
+
+ENG_STANDARD_FEES = [
+    "5% multiplied by the Transaction Value for transactions at or under $1,000,000; or",
+    "4.0% multiplied by the Transaction Value for transactions between $1,000,001 and $5,000,000; or",
+    "3.5% multiplied by the Transaction Value for transactions between $5,000,001 and $10,000,000; or",
+    "2.5% multiplied by the Transaction Value for transactions above $10,000,001.",
+]
+
+# Plain JS, deliberately NOT inside an f-string: braces are literal here.
+ENG_JS = r"""
+(function () {
+  var D = JSON.parse(document.getElementById('eng-data').textContent);
+  var STD_FEES = JSON.parse(document.getElementById('eng-fees').textContent);
+  var OWN = '__own';
+  var $ = function (id) { return document.getElementById(id); };
+  var st = { deal: null, person: null, issuer: null };
+  var peopleById = {};
+  D.people.forEach(function (p) { peopleById[p[0]] = p; });
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  // ── Date: today in America/New_York, "October 2nd, 2026" ──
+  function ordinal(n) {
+    var m = n % 100;
+    if (m >= 11 && m <= 13) return n + 'th';
+    return n + ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th');
+  }
+  function todayNY() {
+    var parts = {};
+    new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric',
+      month: 'long', day: 'numeric' }).formatToParts(new Date())
+      .forEach(function (p) { parts[p.type] = p.value; });
+    return parts.month + ' ' + ordinal(parseInt(parts.day, 10)) + ', ' + parts.year;
+  }
+
+  // ── Type-ahead ──
+  function typeahead(input, list, source, onPick) {
+    var items = [], active = -1;
+    function render() {
+      list.innerHTML = items.map(function (it, i) {
+        return '<div class="ta-item' + (i === active ? ' active' : '') + '" data-i="' + i + '">' +
+          (it.tag ? '<span class="ta-tag">' + esc(it.tag) + '</span>' : '') + esc(it.label) + '</div>';
+      }).join('');
+      list.style.display = items.length ? 'block' : 'none';
+    }
+    function search() {
+      var q = input.value.trim().toLowerCase();
+      items = q ? source(q.split(/\s+/)).slice(0, 40) : [];
+      active = items.length ? 0 : -1;
+      render();
+    }
+    function pick(i) {
+      var it = items[i];
+      if (!it) return;
+      input.value = it.label;
+      items = []; render();
+      onPick(it);
+    }
+    input.addEventListener('input', search);
+    input.addEventListener('focus', function () { if (input.value) search(); });
+    input.addEventListener('keydown', function (e) {
+      if (!items.length) return;
+      if (e.key === 'ArrowDown') { active = Math.min(active + 1, items.length - 1); render(); e.preventDefault(); }
+      else if (e.key === 'ArrowUp') { active = Math.max(active - 1, 0); render(); e.preventDefault(); }
+      else if (e.key === 'Enter') { pick(active); e.preventDefault(); }
+      else if (e.key === 'Escape') { items = []; render(); }
+    });
+    list.addEventListener('mousedown', function (e) {
+      var el = e.target.closest('.ta-item');
+      if (el) { pick(parseInt(el.getAttribute('data-i'), 10)); e.preventDefault(); }
+    });
+    input.addEventListener('blur', function () { setTimeout(function () { items = []; render(); }, 150); });
+  }
+  function matchAll(hay, toks) {
+    for (var i = 0; i < toks.length; i++) if (hay.indexOf(toks[i]) < 0) return false;
+    return true;
+  }
+
+  function dealLabel(d) {
+    var who = '—';
+    if (d.pp.length) {
+      var p = d.pp[0];
+      who = p[1] + (p[2] ? ' / ' + p[2] : '');
+      if (d.pp.length > 1) who += ' +' + (d.pp.length - 1);
+    }
+    return [d.co || '(no company)', d.side || '?', who, d.size || 'size n/a'].join(' · ');
+  }
+  var startIndex = [];
+  D.deals.forEach(function (d) {
+    var label = dealLabel(d);
+    startIndex.push({ kind: 'deal', tag: 'Deal', label: label, ref: d,
+      hay: (label + ' ' + d.pp.map(function (p) { return p[1] + ' ' + p[2]; }).join(' ')).toLowerCase() });
+  });
+  D.people.forEach(function (p) {
+    var label = p[1] + (p[2] ? ' · ' + p[2] : '');
+    startIndex.push({ kind: 'person', tag: 'Person', label: label, ref: p, hay: label.toLowerCase() });
+  });
+  var companyIndex = D.companies.map(function (c) {
+    return { label: c[1], ref: { id: c[0], name: c[1], legal: c[2] }, hay: c[1].toLowerCase() };
+  });
+
+  // ── Select helpers with a "Type your own…" escape hatch ──
+  function fillSelect(sel, opts, pre, withOwn) {
+    var seen = {}, html = '';
+    opts.forEach(function (o) {
+      if (!o.v || seen[o.v]) return;
+      seen[o.v] = 1;
+      html += '<option value="' + esc(o.v) + '">' + esc(o.label || o.v) + '</option>';
+    });
+    if (withOwn !== false) html += '<option value="' + OWN + '">Type your own…</option>';
+    sel.innerHTML = html;
+    if (pre && seen[pre]) sel.value = pre;
+    else if (!Object.keys(seen).length && withOwn !== false) sel.value = OWN;
+    syncOwn(sel);
+  }
+  function syncOwn(sel) {
+    var own = $(sel.id + '-own');
+    if (own) own.style.display = sel.value === OWN ? 'block' : 'none';
+  }
+  function val(id) {
+    var sel = $(id);
+    if (sel.value === OWN) return ($(id + '-own').value || '').trim();
+    return sel.value;
+  }
+
+  // ── Derived fields ──
+  function partyInfo() {
+    var v = $('f-party').value || '', person = null, company = '';
+    if (v.indexOf('p:') === 0) {
+      var pid = v.slice(2);
+      var pool = st.deal ? st.deal.pp : (st.person ? [st.person] : []);
+      pool.forEach(function (p) { if (p[0] === pid) person = p; });
+      if (person) company = person[2];
+    } else if (v.indexOf('c:') === 0) {
+      company = v.slice(2);
+    }
+    return { person: person, company: company };
+  }
+  function refreshParty() {
+    var opts = [];
+    if (st.deal) {
+      st.deal.pp.forEach(function (p) { opts.push({ v: 'p:' + p[0], label: p[1] + (p[2] ? ' (' + p[2] + ')' : '') }); });
+      st.deal.pp.forEach(function (p) { if (p[2]) opts.push({ v: 'c:' + p[2], label: p[2] + ' (company)' }); });
+    } else if (st.person) {
+      var p = st.person;
+      opts.push({ v: 'p:' + p[0], label: p[1] });
+      if (p[2]) opts.push({ v: 'c:' + p[2], label: p[2] + ' (company)' });
+    }
+    fillSelect($('f-party'), opts, opts.length ? opts[0].v : '', false);
+    $('f-party').disabled = !opts.length;
+  }
+  function refreshSellerAndSigner() {
+    var pi = partyInfo();
+    var sl = st.deal ? st.deal.sl : '';
+    var cands = [];
+    if (sl) cands.push({ v: sl, label: sl + '  — Seller Legal Name' });
+    if (pi.company) cands.push({ v: pi.company });
+    if (pi.person) cands.push({ v: pi.person[1] });
+    fillSelect($('f-seller'), cands, sl || (cands[0] && cands[0].v));
+    var signers = [];
+    (st.deal ? st.deal.pp : (st.person ? [st.person] : [])).forEach(function (p) {
+      signers.push({ v: p[1] });
+    });
+    fillSelect($('f-signer'), signers, pi.person ? pi.person[1] : (signers[0] && signers[0].v));
+  }
+  function refreshIssuerLegal() {
+    var iss = st.issuer, opts = [];
+    if (iss && iss.legal) opts.push({ v: iss.legal, label: iss.legal + '  — Legal Name' });
+    if (iss && iss.name) opts.push({ v: iss.name, label: iss.name + '  — Pipeline name' });
+    fillSelect($('f-issuer-legal'), opts, iss ? (iss.legal || iss.name) : '');
+    $('issuer-legal-note').style.display = (iss && !iss.legal) ? 'block' : 'none';
+  }
+  function refreshStructure(list) {
+    $('f-structure').value = list && list.length ? list[0] : '';
+    var extra = (list || []).slice(1);
+    $('structure-note').textContent = extra.length ? 'Deal also lists: ' + extra.join(', ') : '';
+  }
+
+  function onStart(it) {
+    if (it.kind === 'deal') {
+      st.deal = it.ref; st.person = null;
+      st.issuer = { id: it.ref.coId, name: it.ref.co, legal: it.ref.il };
+      $('f-issuer').value = it.ref.co;
+      refreshStructure(it.ref.st);
+      $('start-picked').textContent = 'Deal #' + it.ref.id + (it.ref.stage ? ' · ' + it.ref.stage : '');
+    } else {
+      st.person = it.ref; st.deal = null; st.issuer = null;
+      $('f-issuer').value = '';
+      refreshStructure([]);
+      $('start-picked').textContent = 'Person #' + it.ref[0];
+    }
+    refreshParty();
+    refreshSellerAndSigner();
+    refreshIssuerLegal();
+    preview();
+  }
+
+  typeahead($('f-start'), $('f-start-list'), function (toks) {
+    return startIndex.filter(function (it) { return matchAll(it.hay, toks); });
+  }, onStart);
+  typeahead($('f-issuer'), $('f-issuer-list'), function (toks) {
+    return companyIndex.filter(function (it) { return matchAll(it.hay, toks); });
+  }, function (it) { st.issuer = it.ref; refreshIssuerLegal(); preview(); });
+
+  // ── Fees ──
+  function resetFees() {
+    for (var i = 0; i < 4; i++) $('f-fee-' + i).value = STD_FEES[i];
+    preview();
+  }
+
+  // ── Preview ──
+  function hl(s, fallback) {
+    return s ? '<span class="pv-val">' + esc(s) + '</span>'
+             : '<span class="pv-missing">' + esc(fallback) + '</span>';
+  }
+  function preview() {
+    var full = document.querySelector('input[name="f-type"]:checked').value === 'full';
+    $('row-txn').style.display = full ? 'none' : '';
+    var date = $('f-date').value.trim();
+    var signer = val('f-signer'), seller = val('f-seller');
+    var issuer = val('f-issuer-legal');
+    var structure = $('f-structure').value;
+    var tail = $('f-tail').value.trim();
+    var txn = full ? '1' : $('f-txn').value.trim();
+    var fees = [];
+    for (var i = 0; i < 4; i++) {
+      var f = $('f-fee-' + i).value.trim();
+      if (f) fees.push(f);
+    }
+    var out = '';
+    if (full) {
+      out += '<div class="pv-sec"><div class="pv-h">Agreement</div><p>This Sell-Side Agent Agreement (“<i>Agreement</i>”) ' +
+        'is made and entered into as of ' + hl(date, '[date]') + ' (“<i>Effective Date</i>”), by and between ' +
+        'Rainmaker Securities, LLC, a FINRA registered broker-dealer with CRD# 132995 (“<i>RMS</i>”) and ' +
+        '“<i>Seller</i>” with a name and address as specified on the signature page to this Agreement.</p></div>';
+      out += '<div class="pv-sec"><div class="pv-h">Signature block</div><div class="pv-sig">' +
+        '<div><b>' + hl(signer, '[signer]') + '</b></div><div><b>' + hl(seller, '[seller entity]') + '</b></div>' +
+        '<div class="pv-line">Signature</div></div></div>';
+    }
+    var securities = full
+      ? 'The securities of the Issuer, or the interests in an entity holding the securities of the Issuer, whether directly or indirectly.'
+      : 'The securities of the Issuer.';
+    out += '<div class="pv-sec"><div class="pv-h">Schedule A</div>' +
+      '<div class="pv-txn">TRANSACTION ' + hl(txn, '[#]') + '</div><table class="pv-tbl">' +
+      '<tr><th>Issuer.</th><td>' + hl(issuer, '[issuer]') + '</td></tr>' +
+      '<tr><th>Securities.</th><td>' + esc(securities) + '</td></tr>' +
+      '<tr><th>Success Fee.</th><td>The Success Fee shall be calculated as:<ul>' +
+        (fees.length ? fees.map(function (f) { return '<li>' + hl(f) + '</li>'; }).join('')
+                     : '<li><span class="pv-missing">[no fee lines]</span></li>') + '</ul></td></tr>' +
+      '<tr><th>Tail Period.</th><td>The ' + hl(tail, '[N]') + ' month period after the Referral.</td></tr>' +
+      '<tr><th>Anticipated Structure.</th><td>' + hl(structure, '[structure]') + '</td></tr>' +
+      '</table></div>';
+    $('preview').innerHTML = out;
+  }
+
+  // ── Wire up ──
+  $('f-date').value = todayNY();
+  resetFees();
+  ['f-party'].forEach(function (id) {
+    $(id).addEventListener('change', function () { refreshSellerAndSigner(); preview(); });
+  });
+  ['f-seller', 'f-signer', 'f-issuer-legal'].forEach(function (id) {
+    $(id).addEventListener('change', function () { syncOwn($(id)); preview(); });
+  });
+  document.querySelectorAll('#eng-form input, #eng-form select').forEach(function (el) {
+    el.addEventListener('input', preview);
+    el.addEventListener('change', preview);
+  });
+  $('fee-reset').addEventListener('click', function (e) { e.preventDefault(); resetFees(); });
+  fillSelect($('f-party'), [], '', false); $('f-party').disabled = true;
+  fillSelect($('f-seller'), [], '');
+  fillSelect($('f-signer'), [], '');
+  fillSelect($('f-issuer-legal'), [], '');
+  preview();
+})();
+"""
+
+
+def render_engagement():
+    """Admin-only Engagement Docs page (phase 1: read-only form + live preview)."""
+    try:
+        data = _engagement_data()
+        load_err = ""
+    except Exception as e:
+        print(f"engagement: data load failed: {e}")
+        data = {"deals": [], "companies": [], "people": [], "source": "",
+                "counts": {"deals_total": 0, "deals_live": 0, "companies": 0, "people": 0}}
+        load_err = "Couldn't load Pipeline data from S3."
+    # JSON inside <script> is safe once "</" can't close the tag.
+    data_json = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
+    fees_json = json.dumps(ENG_STANDARD_FEES).replace("</", "<\\/")
+    c = data["counts"]
+    meta = (f'{c["deals_live"]} live deals (of {c["deals_total"]}) · {c["companies"]} companies · '
+            f'{c["people"]} people from {html.escape(data.get("source") or "—")}')
+    fee_boxes = "".join(
+        f'<input type="text" id="f-fee-{i}" class="full" autocomplete="off">' for i in range(4))
+    css = """
+    <style>
+      .eng-wrap { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:28px; margin-top:18px; }
+      @media (max-width: 860px) { .eng-wrap { grid-template-columns:1fr; } }
+      .eng-meta { font-size:12px; color:var(--muted); margin-top:6px; }
+      .eng-err { color:var(--neg); font-size:13px; margin-top:8px; }
+      #eng-form .row { margin-bottom:16px; }
+      #eng-form label.lbl { display:block; font-size:12px; font-weight:600; letter-spacing:.03em;
+        text-transform:uppercase; color:var(--muted); margin-bottom:6px; }
+      #eng-form input[type=text], #eng-form input[type=number], #eng-form select {
+        width:100%; font:inherit; font-size:14px; padding:8px 10px; border:1px solid var(--line);
+        border-radius:8px; background:#fff; color:var(--ink); }
+      #eng-form .full { margin-bottom:6px; }
+      #eng-form .own { margin-top:6px; display:none; }
+      #eng-form .radios label:not(.lbl) { display:inline-flex; align-items:center; gap:6px;
+        margin:0 18px 0 0; font-size:14px; }
+      #eng-form .radios input { width:auto; margin:0; }
+      .note { font-size:12px; color:#9a978f; margin-top:4px; }
+      .ta { position:relative; }
+      .ta-list { display:none; position:absolute; left:0; right:0; top:100%; z-index:20; background:#fff;
+        border:1px solid var(--line); border-radius:8px; max-height:320px; overflow-y:auto;
+        box-shadow:0 6px 24px rgba(20,24,29,.12); }
+      .ta-item { padding:7px 10px; font-size:13px; cursor:pointer; border-top:1px solid #f1efea; }
+      .ta-item:first-child { border-top:none; }
+      .ta-item.active, .ta-item:hover { background:#faf8f3; }
+      .ta-tag { display:inline-block; font-size:10px; font-weight:600; text-transform:uppercase;
+        color:var(--muted); border:1px solid var(--line); border-radius:4px; padding:1px 4px; margin-right:6px; }
+      .eng-preview { border:1px solid var(--line); border-radius:10px; padding:20px 22px; background:#fcfbf8;
+        font-family: 'Times New Roman', Times, serif; font-size:14px; line-height:1.5; align-self:start;
+        position:sticky; top:16px; }
+      .pv-sec { margin-bottom:18px; }
+      .pv-h { font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size:11px;
+        font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-bottom:6px; }
+      .pv-val { background:#fff4c2; border-radius:3px; padding:0 2px; }
+      .pv-missing { color:#b23b3b; }
+      .pv-sig div { margin-bottom:2px; }
+      .pv-line { border-top:1px solid var(--ink); width:220px; margin-top:22px; font-size:12px; }
+      .pv-txn { text-align:center; font-weight:700; margin:4px 0 10px; }
+      .pv-tbl { width:100%; border-collapse:collapse; }
+      .pv-tbl th { text-align:left; vertical-align:top; width:34%; padding:6px 8px 6px 0; font-weight:700;
+        font-size:14px; text-transform:none; letter-spacing:normal; color:var(--ink); }
+      .pv-tbl td { padding:6px 0; vertical-align:top; }
+      .pv-tbl ul { margin:4px 0 0 18px; }
+      .gen-btn { margin-top:8px; font:inherit; font-size:14px; font-weight:600; padding:10px 16px;
+        border-radius:8px; border:1px solid var(--line); background:#eeece7; color:#9a978f; cursor:not-allowed; }
+    </style>"""
+    body = css + f"""
+    <h1>Engagement Docs</h1>
+    <p class="sub">Sell-side agreement and Schedule A. Read-only preview — nothing is generated or sent yet.</p>
+    <p class="eng-meta">{meta}</p>
+    {f'<p class="eng-err">{html.escape(load_err)}</p>' if load_err else ''}
+    <div class="eng-wrap">
+      <form id="eng-form" autocomplete="off" onsubmit="return false">
+        <div class="row radios"><label class="lbl">Type</label>
+          <label><input type="radio" name="f-type" value="full" checked> Full sell-side agreement</label>
+          <label><input type="radio" name="f-type" value="schedule"> Schedule A only</label>
+        </div>
+        <div class="row"><label class="lbl" for="f-start">Start from</label>
+          <div class="ta"><input type="text" id="f-start" placeholder="Search live deals or people…">
+            <div class="ta-list" id="f-start-list"></div></div>
+          <div class="note" id="start-picked"></div>
+        </div>
+        <div class="row"><label class="lbl" for="f-party">Party</label>
+          <select id="f-party"></select></div>
+        <div class="row"><label class="lbl" for="f-issuer">Company (issuer)</label>
+          <div class="ta"><input type="text" id="f-issuer" placeholder="Search Pipeline companies…">
+            <div class="ta-list" id="f-issuer-list"></div></div></div>
+        <div class="row"><label class="lbl" for="f-seller">Seller entity</label>
+          <select id="f-seller"></select>
+          <input type="text" id="f-seller-own" class="own" placeholder="Seller entity"></div>
+        <div class="row"><label class="lbl" for="f-signer">Signer</label>
+          <select id="f-signer"></select>
+          <input type="text" id="f-signer-own" class="own" placeholder="Signer name"></div>
+        <div class="row"><label class="lbl" for="f-issuer-legal">Issuer legal name</label>
+          <select id="f-issuer-legal"></select>
+          <input type="text" id="f-issuer-legal-own" class="own" placeholder="Issuer legal name">
+          <div class="note" id="issuer-legal-note" style="display:none">No Legal Name in Pipeline</div></div>
+        <div class="row"><label class="lbl" for="f-structure">Structure</label>
+          <select id="f-structure"><option value=""></option><option>Direct</option>
+            <option>SPV</option><option>Forward</option></select>
+          <div class="note" id="structure-note"></div></div>
+        <div class="row"><label class="lbl">Success fee</label>{fee_boxes}
+          <div class="note">A blank box drops that line. <a href="#" id="fee-reset">Reset to standard</a></div></div>
+        <div class="row"><label class="lbl" for="f-tail">Tail (months)</label>
+          <input type="number" id="f-tail" value="12" min="0"></div>
+        <div class="row" id="row-txn" style="display:none"><label class="lbl" for="f-txn">Transaction #</label>
+          <input type="number" id="f-txn" min="1"></div>
+        <div class="row"><label class="lbl" for="f-date">Date</label>
+          <input type="text" id="f-date"></div>
+        <button type="button" class="gen-btn" disabled>Generate (coming next)</button>
+      </form>
+      <div class="eng-preview" id="preview"></div>
+    </div>
+    <script type="application/json" id="eng-data">{data_json}</script>
+    <script type="application/json" id="eng-fees">{fees_json}</script>
+    <script>""" + ENG_JS + "</script>"
+    return html_response(body, eyebrow="Admin", is_admin=True, view="engagement")
 
 
 def _auc_deadline_cell(aid, close_date):
@@ -6026,6 +6621,8 @@ def _route(event, context):
         return render_live_auctions_overview(view_id)
     if qs.get("view") == "sendlink" and is_admin:
         return render_send_link()
+    if qs.get("view") == "engagement" and is_admin:
+        return render_engagement()
     # The two pages this one replaced. Bookmarks and pasted URLs still land somewhere
     # useful, and the address bar corrects itself to the canonical route.
     if qs.get("view") in ("link", "deallinks") and is_admin:
