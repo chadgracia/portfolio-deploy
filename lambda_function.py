@@ -3362,6 +3362,9 @@ def render_admin_hub():
          "?view=sendlink"),
         ("All portfolios", "Every client's holdings in one roll-up.",
          "?view=portfolios"),
+        # None (not "") when ADMIN_KEY is unset: rendered greyed out, unlinked.
+        ("Client Standing", "Update client badges, tiers and referrals",
+         (SYNDICATE_DASH_URL + "&view=standing") if SYNDICATE_DASH_URL else None),
         ("Deal alerts", "Active deals with live counterparty match counts, and a "
                         "button to alert them.",
          ADMIN_ALERTS_URL),
@@ -3377,6 +3380,11 @@ def render_admin_hub():
     # Every tool opens in its own tab, so the hub stays put behind them.
     cards = ""
     for title, desc, href in tiles:
+        if href is None:  # keyed card shown disabled when ADMIN_KEY is unset
+            cards += (f'<div class="hub-card hub-card-off">'
+                      f'<div class="hub-title">{html.escape(title)}</div>'
+                      f'<div class="hub-desc">{html.escape(desc)}</div></div>')
+            continue
         if not href:  # keyed link omitted when ADMIN_KEY is unset
             continue
         cards += (f'<a class="hub-card" href="{html.escape(href, quote=True)}"'
@@ -3423,6 +3431,8 @@ def render_admin_hub():
                    padding:16px 18px; text-decoration:none; color:inherit;
                    background:#fff; transition:border-color .15s, background .15s; }}
       .hub-card:hover {{ border-color:var(--ink); background:#faf8f3; }}
+      .hub-card-off, .hub-card-off:hover {{ opacity:.5; cursor:default;
+                   border-color:var(--line); background:#fff; }}
       .hub-title {{ font-weight:600; font-size:16px; margin-bottom:5px; }}
       .hub-desc {{ font-size:13px; color:#6b7280; line-height:1.45; }}
       .syn-card {{ grid-column: 1 / -1; }}
