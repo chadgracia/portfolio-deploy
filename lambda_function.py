@@ -1799,6 +1799,104 @@ def _fetch_standing(person_id):
     return data
 
 
+# "Your status" card on the Portfolio & Watchlist view: same standing_json route,
+# but cached per person_id for 5 minutes in module memory (survives across
+# invocations of a warm container, unlike _standing_cache above).
+_STATUS_CARD_TTL_SECONDS = 5 * 60
+_status_card_cache = {}
+
+
+def _fetch_status_card_standing(person_id):
+    """Standing payload for the status card, or None. visible:false caches as None;
+    any failure logs one line and returns None (uncached, so the next view retries)."""
+    pid = str(person_id or "").strip()
+    if not pid:
+        return None
+    now = time.monotonic()
+    hit = _status_card_cache.get(pid)
+    if hit and (now - hit[0]) < _STATUS_CARD_TTL_SECONDS:
+        return hit[1]
+    if not SYNDICATE_DASH_URL:
+        print("standing fetch failed: ADMIN_KEY not set")
+        return None
+    try:
+        req = urllib.request.Request(SYNDICATE_DASH_URL + "&view=standing_json&pid="
+                                     + urllib.parse.quote(pid, safe=""))
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            if resp.status != 200:
+                raise ValueError(f"HTTP {resp.status}")
+            parsed = json.loads(resp.read().decode())
+        if not isinstance(parsed, dict):
+            raise ValueError("response is not a JSON object")
+    except Exception as e:
+        print(f"standing fetch failed: {type(e).__name__}: {e}")
+        return None
+    data = parsed if parsed.get("visible") is True else None
+    _status_card_cache[pid] = (now, data)
+    return data
+
+
+_STATUS_CARD_CSS = """
+  .cts.ys { margin: 0 0 18px; }
+  .cts.ys .status { padding: 18px; gap: 12px; }
+  .cts.ys .mark.off { border: 2px solid #b8c0c8; box-sizing: border-box; }
+  .cts.ys .note { margin-top: 0; font-style: normal; }
+  .cts.ys .note a { color: inherit; }
+  .cts.ys .foot { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+  .cts.ys, .cts.ys * { overflow-wrap: anywhere; }
+  @media (max-width: 480px) { .cts.ys .status { padding: 14px; } }
+"""
+
+
+def _render_status_card(person_id):
+    """The "Your status" card HTML, or "" when there's nothing to show. Never raises."""
+    try:
+        st = _fetch_status_card_standing(person_id)
+        if not st:
+            return ""
+        pill = ""
+        if st.get("tier") is not None:
+            label = str(st.get("tier_label") or st.get("tier") or "").strip()
+            try:
+                pct_txt = f"{float(st.get('discount_pct')):g}% off"
+            except (TypeError, ValueError):
+                pct_txt = ""
+            txt = " · ".join(x for x in (label, pct_txt) if x)
+            if txt:
+                pill = f'<span class="pill">{html.escape(txt)}</span>'
+        lis = ""
+        for it in (st.get("items") or []):
+            if not isinstance(it, dict):
+                continue
+            label = html.escape(str(it.get("label") or ""))
+            note = html.escape(str(it.get("note") or ""))
+            href = _safe_href(it.get("form_url"))
+            extra = ""
+            if note:
+                if href:
+                    note = f'<a href="{href}" target="_blank" rel="noopener">{note}</a>'
+                extra = f'<span class="note">{note}</span>'
+            mark = _CTS_TICK if it.get("done") else '<span class="mark off"></span>'
+            lis += f'<li>{mark}<div>{label}{extra}</div></li>'
+        tiers_href = _safe_href(st.get("tiers_url"))
+        return (
+            '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:'
+            'opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">'
+            f'<style>{_CTS_CSS}{_STATUS_CARD_CSS}</style>'
+            '<div class="cts ys"><div class="status">'
+            f'<div class="status-head"><span class="who">Your status</span>{pill}</div>'
+            + (f'<ul class="checks">{lis}</ul>' if lis else "")
+            + '<div class="foot">'
+            + (f'<p><a href="{tiers_href}" target="_blank" rel="noopener">How tiers work &rarr;</a></p>'
+               if tiers_href else "")
+            + "<p>See something that looks wrong? Reply to any of my emails and I'll correct it.</p>"
+            '</div></div></div>'
+        )
+    except Exception as e:
+        print(f"standing fetch failed: render error {type(e).__name__}: {e}")
+        return ""
+
+
 def _syndicate_eligible_emails():
     """Lowercased emails eligible for the Syndicate Dashboard, fetched once per
     warm container from syndicate-dash's own admin-gated ?tenants=list route --
@@ -5238,6 +5336,8 @@ def render_watchlist_status(client_id, is_admin=False):
     except Exception as e:
         print(f"watchlist status: standing link skipped: {e}")
 
+    standing_card = _render_status_card(client_id)
+
     return html_response(f"""
     <style>
       .wl-wrap {{ overflow-x: auto; }}
@@ -5292,7 +5392,7 @@ def render_watchlist_status(client_id, is_admin=False):
     <style>
       .wl-spacer {{ display: none; }}
     </style>
-    {status_link}{body}
+    {standing_card}{status_link}{body}
     """, is_admin=is_admin, view="watchlist_status", client_id=client_id)
 
 
