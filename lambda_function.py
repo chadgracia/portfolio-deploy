@@ -4069,6 +4069,10 @@ ENG_FEE_TEMPLATES = [
 ]
 ENG_FEES_STANDARD = ["5", "4.0", "3.5", "2.5"]
 ENG_FEES_GENEROUS = ["4", "3.5", "3", "2"]
+# Non-Circumvention's item number under "2. TERMS AND CONDITIONS", read from the Google
+# Docs "Sell-Side Secondary Agent Agreement Template" and "Buy-Side Agent Agreement
+# Template" (the buy-side template has no Regulation S-P item, so it sits one earlier).
+ENG_NONCIRC_SECTION = {"sell": 6, "buy": 5}
 
 # Plain JS, deliberately NOT inside an f-string: braces are literal here.
 ENG_JS = r"""
@@ -4452,10 +4456,12 @@ ENG_JS = r"""
     for (var i = 0; i < 4; i++) fees += '<li>' + hl(feeLine(i)) + '</li>';
     var minRow = $('f-min-on').checked
       ? '<tr><th>Minimum Commission.</th><td>' + hl(money($('f-min-amt').value), '[amount]') + '</td></tr>' : '';
-    var scope = sd === 'buy'
-      ? '<tr><th>Scope of Coverage.</th><td>For the avoidance of doubt, the scope of this Agreement and any Success Fee ' +
-        'obligations extend to any and all transactions, securities sales, or fund allocations completed between the ' +
-        'Parties during the Tail Period, regardless of whether the specific Issuer or security was listed on Schedule A ' +
+    var scope = $('f-scope-on').checked
+      ? '<tr><th>Scope of Coverage.</th><td>For the avoidance of doubt (see Section ' + C.noncirc_section[sd] +
+        ', Non-Circumvention), the scope of this Agreement and any Success Fee obligations extend to any and all ' +
+        'transactions, securities sales, or fund allocations completed between ' +
+        (sd === 'buy' ? 'Buyer and any Referred Seller' : 'Seller and any Referred Buyer') +
+        ' during the Tail Period, regardless of whether the specific Issuer or security was listed on Schedule A ' +
         'at the time of Referral.</td></tr>' : '';
     out += '<div class="pv-sec"><div class="pv-h">Schedule A</div>' +
       '<div class="pv-txn">TRANSACTION ' + hl(txn, '[#]') + '</div><table class="pv-tbl">' +
@@ -4463,8 +4469,8 @@ ENG_JS = r"""
       '<tr><th>Securities.</th><td>' + esc(securities) + '</td></tr>' +
       '<tr><th>Success Fee.</th><td>The Success Fee shall be calculated as:<ul>' + fees + '</ul></td></tr>' +
       minRow +
-      '<tr><th>Tail Period.</th><td>The ' + hl(tail, '[N]') + ' month period after the Referral.</td></tr>' +
       scope +
+      '<tr><th>Tail Period.</th><td>The ' + hl(tail, '[N]') + ' month period after the Referral.</td></tr>' +
       '<tr><th>Anticipated Structure.</th><td>' + hl(structure, '[structure]') + '</td></tr>' +
       '<tr><th>Initials.</th><td><table class="pv-init">' +
         '<tr><td>' + Party + ':</td><td><span class="uline"></span></td><td>Date:</td><td><span class="uline"></span></td></tr>' +
@@ -4521,7 +4527,8 @@ def render_engagement():
     # JSON inside <script> is safe once "</" can't close the tag.
     data_json = json.dumps(page, separators=(",", ":")).replace("</", "<\\/")
     const_json = json.dumps({"fee_templates": ENG_FEE_TEMPLATES, "fees_standard": ENG_FEES_STANDARD,
-                             "fees_generous": ENG_FEES_GENEROUS}).replace("</", "<\\/")
+                             "fees_generous": ENG_FEES_GENEROUS,
+                             "noncirc_section": ENG_NONCIRC_SECTION}).replace("</", "<\\/")
     c = counts
     meta = (f'{c["deals_live"]} live deals (of {c["deals_total"]}) · '
             f'{c["deals_closed"] if c["closed_ok"] else "no"} closed deals · {c["companies"]} companies · '
@@ -4649,6 +4656,8 @@ def render_engagement():
         <div class="row"><label class="lbl">Minimum commission</label>
           <div class="min-row"><label class="chk"><input type="checkbox" id="f-min-on"> Apply</label>
             <input type="text" id="f-min-amt" value="7,500" disabled></div></div>
+        <div class="row"><label class="lbl">Scope of coverage</label>
+          <label class="chk"><input type="checkbox" id="f-scope-on"> Add Scope of Coverage row</label></div>
         <div class="row" id="row-platinum" style="display:none">
           <label class="chk"><input type="checkbox" id="f-platinum" disabled>
             Platinum client: apply commission discounts (coming soon)</label></div>
