@@ -4073,6 +4073,414 @@ ENG_FEES_GENEROUS = ["4", "3.5", "3", "2"]
 # Docs "Sell-Side Secondary Agent Agreement Template" and "Buy-Side Agent Agreement
 # Template" (the buy-side template has no Regulation S-P item, so it sits one earlier).
 ENG_NONCIRC_SECTION = {"sell": 6, "buy": 5}
+# Agreement text for the print version, copied verbatim (typos included) from the Google
+# Docs "Sell-Side Secondary Agent Agreement Template" (1mEO3PEVnltSmUASFq6s-f9ePaKx9224hFC9l12tCYeE)
+# and "Buy-Side Agent Agreement Template" (1JgRtsRkkl1TuKRQiNiQQxrnL8FXnwTTtNy6IYpkNunw).
+# Blocks: top / title / h (section heading) / p / r (recital) / c [title, rest] (clause) /
+# s1, s2 (sub-points) / sigfollow / sigp. The page numbers them; the text is untouched.
+ENG_PRINT_TEMPLATES_JSON = (
+    "{\"sell\": [[\"top\", \"Sell-Side Secondary\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00"
+    "a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0CONFIDENTI"
+    "AL\"], [\"title\", \"AGENT AGREEMENT\"], [\"h\", \"OVERVIEW\"], [\"p\", \"This Sell-Side Agent Agreement (\\u"
+    "201cAgreement\\u201d) is made and entered into as of August 29th, 2026 (\\u201cEffective Date\\u201"
+    "d), by and between Rainmaker Securities, LLC, a FINRA registered broker-dealer with CRD# 132995 "
+    "(\\u201cRMS\\u201d) and \\u201cSeller\\u201d with a name and address as specified on the signature p"
+    "age to this Agreement. RMS and Seller may each be referred to individually as a \\u201cParty\\u201"
+    "d and together as the \\u201cParties\\u201d.\"], [\"r\", \"Seller offers the \\u201cSecurities\\u201d of"
+    " the \\u201cIssuer\\u201d, as defined in Schedule A\\u00a0to this Agreement, pursuant to exemption "
+    "from registration under the Securities Act of 1933 (\\u201cSecurities Act\\u201d).\"], [\"r\", \"Selle"
+    "r engages RMS as its agent to refer Seller to potential buyers of the Securities (\\u201cBuyers\\u"
+    "201d). \"], [\"r\", \"Upon completion of a (a) direct sale, (b) indirect transfer of interest in, or"
+    " (c) hypothecation of the Securities involving (i) Seller or Seller\\u2019s affiliate, and (ii) a"
+    " Referred Buyer (\\u201cTransaction\\u201d), RMS shall be paid a commission based upon the value o"
+    "f the consideration paid from the Referred Buyer to the Seller within the Transaction (\\u201cTra"
+    "nsaction Value\\u201d).\"], [\"p\", \"In consideration of the mutual covenants, promises and obligati"
+    "ons set forth below, the Parties agree as follows:\"], [\"h\", \"TERMS AND CONDITIONS\"], [\"c\", \"Regu"
+    "lation S-P Notification.\", \" \\u00a0Seller acknowledges that the RMS privacy notice, provided pur"
+    "suant to SEC Regulation S-P, is available at www.rainmakersecurities.com/privacy-policy\\u00a0and"
+    " agrees that delivery via this hyperlink constitutes delivery of the Regulation S-P privacy noti"
+    "ce.\"], [\"c\", \"Scope of Services.\", \"\\u00a0Seller engages RMS as its agent to use commercially re"
+    "asonable efforts to refer Seller to potential Buyers that RMS reasonably believes are ready, wil"
+    "ling, and able to enter into a Transaction (the \\u201cServices\\u201d).\\u00a0On an as needed basi"
+    "s, and in furtherance of RMS performance of the Services, Seller authorizes RMS to enter into fe"
+    "e sharing arrangements with third-party brokers, agents, and finders, provided that no such arra"
+    "ngement shall result in any additional cost to Seller beyond that which is contemplated by this "
+    "Agreement. Seller acknowledges that RMS provides no representation, assurance, or warranty that "
+    "a Referral will be made or Transaction will be completed. Seller may accept or reject any propos"
+    "ed Transaction for any reason or no reason in Seller\\u2019s sole discretion.\"], [\"c\", \"Referred "
+    "Buyer.\", \"\\u00a0A Buyer shall qualify as a Referred Buyer if RMS or an existing Referred Buyer ("
+    "each a \\u201cReferring Party\\u201d) makes a Referral to such Buyer during the term of this Agree"
+    "ment. \"], [\"s1\", \"A \\u201cReferral\\u201d shall be deemed to have occurred if:\"], [\"s2\", \"Referri"
+    "ng Party introduces such Buyer to the Seller, Seller\\u2019s affiliate, or their respective emplo"
+    "yees, officers, agents, or representatives (\\u201cSeller\\u00a0Representatives\\u201d); or \"], [\"s"
+    "2\", \"Referring Party notifies Seller or Seller Representatives or otherwise makes them aware of "
+    "Buyer\\u2019s interest in the purchase of Seller\\u2019s Securities.\"], [\"s1\", \"A Referred Buyer s"
+    "hall also include any affiliate, subsidiary, related parties under common control of such Referr"
+    "ed Buyer, and entities owned or controlled by such Referred Buyer. \"], [\"s1\", \"A Referral shall "
+    "be presumed valid, unless disqualified. A Buyer shall be disqualified as a Referred Buyer if, wi"
+    "thin two business days of a Referral, the Seller can provide substantive, written evidence that "
+    "the Seller had, previously and independently from the Referring Party efforts, been in mutual co"
+    "mmunications with the Buyer regarding a Transaction for the Securities during the six month peri"
+    "od prior to the Referral.\"], [\"c\", \"Success Fees.\", \"\\u00a0If Referred Buyer completes a Transac"
+    "tion within the \\u201cTail Period\\u201d, as defined in Schedule A\\u00a0to this Agreement, RMS sh"
+    "all be paid a commission based upon the Transaction Value (\\u201cSuccess Fee\\u201d). The Success"
+    " Fee shall be paid to RMS as follows:\"], [\"s1\", \"The Success Fee shall be calculated as defined "
+    "in Schedule A.\"], [\"s1\", \"The Success Fee shall be paid via wire transfer, in U.S. Dollars, and "
+    "in immediately available funds to the accounts and in the amounts set forth in the wire transfer"
+    " instructions provided by RMS.\"], [\"s1\", \"The Success Fee shall become due and payable concurren"
+    "tly with payment of the Transaction Value by the Referred Buyer to the Seller, whether Transacti"
+    "on Value is paid via the closing of escrow or via direct payment to the Seller.\"], [\"s1\", \"In th"
+    "e event escrow is used to complete a Transaction, the Seller agrees, at the sole discretion and "
+    "direction of RMS, to include as irrevocable conditions to closing of escrow, the payment of the "
+    "applicable Success Fee due.\"], [\"s1\", \"If the Transaction requires Issuer approval, the Seller s"
+    "hall remain obligated to pay the Success Fee to RMS if, as a direct result of submitting a Refer"
+    "red Buyer\\u2019s Transaction for the Securities to the Issuer, the Issuer or existing shareholde"
+    "r of the Issuer purchases the Securities, whether via the exercise of any applicable right of fi"
+    "rst refusal or otherwise.\"], [\"c\", \"Late Fees.\", \"\\u00a0For each thirty-days an outstanding bala"
+    "nce remains due and payable by Seller, RMS shall assess a late fee equal to the lesser of: (i) o"
+    "f five percent [5%]; or (ii) the maximum percentage allowable by applicable law (\\u201cLate Fee\\"
+    "u201d). \\u00a0The Late Fee shall be assessed on the total outstanding balance due and payable at"
+    " each thirty-day interval, including Late Fees previously assessed.\"], [\"c\", \"Non-Circumvention."
+    "\", \" Seller shall not circumvent, avoid, bypass or obviate RMS, directly or indirectly, to avoid"
+    " payment of Success Fees to RMS. Furthermore, Seller shall not, and Seller shall not direct its "
+    "affiliates, employees, directors, officers, partners, or advisors to contact, solicit, or deal w"
+    "ith any Referred Buyer, directly or indirectly, in connection with the purchase or sale of secur"
+    "ities without express written authorization of RMS. During the Tail Period, Seller shall not dir"
+    "ectly market or offer any securities to a Referred Buyer without RMS's prior written consent, or"
+    " without paying RMS its applicable Success Fee in the event a Transaction is completed.\"], [\"c\","
+    " \"Termination.\", \"\\u00a0This Agreement may be terminated by either Party upon delivery of writte"
+    "n notice at least thirty days prior to termination. Upon termination, RMS shall immediately ceas"
+    "e solicitation of Referrals on behalf of Seller. Seller\\u2019s obligation to pay any outstanding"
+    " balance shall survive termination. Seller\\u2019s obligation to pay Success Fees shall survive w"
+    "hen: (i) the Referral occurred prior to termination; and (ii) the Transaction is initiated befor"
+    "e the end of the Tail Period.\"], [\"h\", \"REPRESENTATIONS, WARRANTIES, AND COVENANTS\"], [\"c\", \"\", "
+    "\"Mutual representations, warranties, and covenants of the Parties:\"], [\"s1\", \"This Agreement has"
+    " been duly authorized, executed, and delivered on its behalf, and is its legal, valid and bindin"
+    "g agreement, enforceable against it in accordance with its terms.\"], [\"s1\", \"Party is either a n"
+    "atural person, or an entity that is duly organized, validly existing and in good standing under "
+    "the laws of the state of its jurisdiction of formation or organization and has full power and au"
+    "thority to execute, deliver and perform its obligations under this Agreement. The Party\\u2019s p"
+    "erformance of its obligations under this Agreement will not conflict with, violate the terms of "
+    "or constitute a default under: (A) its articles of incorporation, by-laws or similar governing d"
+    "ocuments; (B) any other agreement or instrument to which it is a party or by which it is bound o"
+    "r to which any of its property or assets are subject; or (C) any order, rule, law, regulation, o"
+    "r other legal requirement applicable to it or its property or assets.\"], [\"c\", \"\", \"Seller repre"
+    "sents, warrants to, and covenants with RMS as follows:\"], [\"s1\", \"Seller has entered into this A"
+    "greement in its sole discretion, and not as a result of any influence, advice, call to action, o"
+    "r recommendation made by RMS or its representatives.\"], [\"s1\", \"Each Transaction will be structu"
+    "red and effected pursuant to an applicable exemption from registration under the Securities Act "
+    "and applicable state securities laws. The Seller shall be solely responsible for ensuring each T"
+    "ransaction complies with all applicable provisions of the Securities Act, as well as applicable "
+    "state securities laws. The Seller shall not structure or execute any Transaction in a manner tha"
+    "t would require RMS to be registered with the Commodity Futures Trading Commission in any capaci"
+    "ty under the Commodity Exchange Act.\"], [\"s1\", \"Seller agrees to provide RMS with the Seller\\u20"
+    "19s identity verification information and Transaction documentation RMS reasonably deems require"
+    "d to maintain compliance with applicable laws and regulations.\"], [\"s1\", \"In the event Seller en"
+    "ters into a Transaction structured as a forward sale contract involving the Securities, Seller r"
+    "epresents and warrants to RMS:\"], [\"s2\", \"Seller qualifies as an \\u201cEligible Contract Partici"
+    "pant\\u201d as defined by Section 1a(18) of the Commodities Exchange Act, as amended; or \"], [\"s2"
+    "\", \"Seller is not aware (and has not been made aware) of any contractual restrictions on transfe"
+    "r of the Securities, or Seller has obtained a waiver from the Issuer with respect to such restri"
+    "ctions; and\"], [\"s2\", \"Any such forward sale agreement between Seller and Buyer shall be intende"
+    "d to be physically settled via the delivery of Securities without option for cash offset.\"], [\"s"
+    "1\", \"Seller has read and understands the required broker-dealer disclosures located at www.rainm"
+    "akersecurities.com/disclosures, including but not limited to, the Relationship Summary.\"], [\"c\","
+    " \"\", \"RMS represents, warrants to, and covenants with Seller as follows:\"], [\"s1\", \"RMS agrees t"
+    "o maintain any and all registrations and licenses under the relevant laws applicable to its oper"
+    "ations in connection with the services performed pursuant to this Agreement including registrati"
+    "on as a broker-dealer with the SEC, FINRA, and every state or territory of the United States of "
+    "America where such registration is required to complete a Transaction.\"], [\"s1\", \"RMS shall be r"
+    "esponsible for supervising the activities of its associated persons that are conducted in furthe"
+    "rance of this Agreement to ensure compliance with applicable law.\"], [\"h\", \"MISCELLANEOUS TERMS "
+    "AND CONDITIONS\"], [\"c\", \"Entire Agreement.\", \"\\u00a0This Agreement, together with any Schedules,"
+    " constitutes the entire agreement between the Parties and supersedes, voids, and rescinds any an"
+    "d all prior oral or written agreements between RMS and Seller on the subject matter related to t"
+    "his Agreement, except with respect to any Non-Circumvention or Non-Disclosure Agreements execute"
+    "d between the Parties. This Agreement may not be amended nor modified except by the mutual writt"
+    "en agreement of the Parties. The Parties understand and agree that only the RMS President, Gener"
+    "al Counsel, and/or Managing Director have the authority to bind RMS to this agreement.\"], [\"c\", "
+    "\"Counterparts.\", \"\\u00a0This Agreement may be executed in counterparts, each of which shall be d"
+    "eemed an original but all of which shall constitute one and the same instrument.\"], [\"c\", \"Sever"
+    "ability.\", \"\\u00a0Any provision of this Agreement that is prohibited or unenforceable in any jur"
+    "isdiction shall, as to such jurisdiction, be ineffective to the extent of such prohibition or un"
+    "enforceability without invalidating the remaining provisions, and any such prohibition or unenfo"
+    "rceability in any jurisdiction shall not invalidate or render unenforceable such provision in an"
+    "y other jurisdiction.\"], [\"c\", \"Headings:\", \" \\u00a0Headings of this Agreement are for the conve"
+    "nience of the Parties only, and are not intended to be a part of or to affect the meanings or in"
+    "terpretation of this Agreement.\"], [\"c\", \"Assignment and Successors.\", \"\\u00a0This Agreement sha"
+    "ll be binding upon, and shall inure to the benefit of the Parties hereto, their successors, perm"
+    "itted assigns and legal representatives as well as subsidiaries, affiliates, joint-ventures, hei"
+    "rs and any other related parties or entities. This Agreement shall not be assigned by the Partie"
+    "s without prior mutual written consent.\"], [\"c\", \"Waiver.\", \"\\u00a0 The waiver by a Party of a b"
+    "reach of any provision of this Agreement shall not operate nor be construed as a waiver of any s"
+    "ubsequent breach by a Party. The failure of a Party to insist upon strict adherence to any provi"
+    "sion of this Agreement shall not constitute a waiver or thereafter deprive such Party of the rig"
+    "ht to insist upon a strict adherence.\"], [\"c\", \"Privacy Notice.\", \"\\u00a0To help the government "
+    "fight the funding of terrorism and money laundering activities, federal law requires all financi"
+    "al institutions to obtain, verify, and record information about the identities of individuals an"
+    "d institutions with which it does business. Therefore, RMS will verify the information provided "
+    "by the counterparty of this Agreement through publicly available private and government sources."
+    "\"], [\"c\", \"Notice to the Parties.\", \"\\u00a0The \\u201cwritten notice\\u201d requirement of this Ag"
+    "reement shall be satisfied if received at the Party\\u2019s address or email specified on the sig"
+    "nature page, or, if to Seller, (i) via email sent to Seller\\u2019s account last known to RMS, or"
+    " (ii) by letter sent via post or courier to the Seller\\u2019s address last known to RMS.\"], [\"c\""
+    ", \"Relationship of Parties.\", \"\\u00a0Neither Party may legally bind the other Party, unless expr"
+    "essly authorized in writing. No joint venture, partnership, employment, or any other relationshi"
+    "p, including any clearing arrangement, is intended, accomplished or embodied in this Agreement. "
+    "Both Parties may have similar dealings with other parties and their relationship is only exclusi"
+    "ve to the extent specified in the Agreement.\"], [\"c\", \"Indemnification.\", \"\\u00a0Each Party agre"
+    "es to indemnify, defend and hold harmless the other Party (including its respective affiliates, "
+    "directors, officers, employees, successors and agents) from and against any and all losses, clai"
+    "ms, expenses, damages and liabilities (including reasonable attorney fees and disbursements and "
+    "other expenses for investigating or defending any actions or threatened actions) to which such o"
+    "ther Party may become subject based upon, arising out of or otherwise in respect of the other Pa"
+    "rty\\u2019s willful misconduct, gross negligence, fraudulent or criminal act, or a material breac"
+    "h of this Agreement by the Party of the provisions of this Agreement. Parties agree to notify ea"
+    "ch other, in writing, within fifteen days of any claim asserted or any legal action commenced ag"
+    "ainst it in connection with this Agreement. The indemnifying Party shall not be liable to indemn"
+    "ify the other Party for an aggregate amount of losses in excess of the total value of the Succes"
+    "s Fees which were paid or made payable under the Agreement.\"], [\"c\", \"Governing Law and Jurisdic"
+    "tion.\", \" This Agreement shall be construed and governed in accordance with the laws of the Stat"
+    "e of Delaware, without reference to its conflict of laws provisions. The Parties submit to the e"
+    "xclusive jurisdiction of the state or federal courts located in the State of Delaware (\\u201cCou"
+    "rts\\u201d).\"], [\"c\", \"FINRA Pre-Dispute Arbitration Disclosure.\", \" By signing this Agreement, t"
+    "he Parties acknowledge and agrees to the following:\"], [\"s1\", \"All Parties to this Agreement are"
+    " giving up the right to sue each other in court, including the right to a trial by jury, except "
+    "as provided by the rules of the arbitration forum in which a claim is filed.\"], [\"s1\", \"Arbitrat"
+    "ion awards are generally final and binding; a Party's ability to have a court reverse or modify "
+    "an arbitration award is very limited.\"], [\"s1\", \"The ability of the Parties to obtain documents,"
+    " witness statements and other discovery is generally more limited in arbitration than in court p"
+    "roceedings.\"], [\"s1\", \"The arbitrators do not have to explain the reason(s) for their award unle"
+    "ss, in an eligible case, a joint request for an explained decision has been submitted by all Par"
+    "ties to the panel at least 20 days prior to the first scheduled hearing date.\"], [\"s1\", \"The pan"
+    "el of arbitrators may include a minority of arbitrators who were or are affiliated with the secu"
+    "rities industry.\"], [\"s1\", \"The rules of some arbitration forums may impose time limits for brin"
+    "ging a claim in arbitration. In some cases, a claim that is ineligible for arbitration may be br"
+    "ought in court.\"], [\"s1\", \"The rules of the arbitration forum in which the claim is filed, and a"
+    "ny amendments thereto, shall be incorporated into this agreement.\"], [\"s1\", \"No person shall bri"
+    "ng a putative or certified class action to arbitration, nor seek to enforce any pre-dispute arbi"
+    "tration agreement against any person who has initiated in court a putative class action; or who "
+    "is a member of a putative class who has not opted out of the class with respect to any claims en"
+    "compassed by the putative class action until: (i) the class certification is denied; or (ii) the"
+    " class is decertified; or (iii) the customer is excluded from the class by the court. Such forbe"
+    "arance to enforce an agreement to arbitrate shall not constitute a waiver of any rights under th"
+    "is agreement except to the extent stated herein.\"], [\"s1\", \"By initiating, consenting to, or sub"
+    "stantially participating in any legal proceeding or arbitration administered by a forum other th"
+    "an FINRA, including, without limitation, JAMS or the Courts, the Seller shall be deemed to have "
+    "voluntarily and knowingly waived any right to compel arbitration before FINRA in connection with"
+    " such dispute.\"], [\"c\", \"Dispute Resolution.\", \"\\u00a0Any dispute, claim or controversy arising "
+    "out of or relating to this Agreement or the breach, termination, enforcement, interpretation or "
+    "validity of the Agreement, including the determination of the scope or applicability of this agr"
+    "eement to arbitrate, whether brought against a Party or its respective affiliates, employees or "
+    "agents (\\u201cDispute\\u201d), shall be submitted to and administered by JAMS pursuant to its Com"
+    "prehensive Arbitration Rules and Procedures and in accordance with the Expedited Procedures in t"
+    "hose Rules (\\u201cJAMS Rules\\u201d). Arbitration under the JAMS Rules shall be held via remote h"
+    "earings before three arbitrators. Judgment on the award shall be final and may be entered in any"
+    " court having jurisdiction. This clause shall not preclude either Party from seeking provisional"
+    " remedies in aid of arbitration from the Courts.\\u00a0\"], [\"p\", \"If arbitration administered by "
+    "JAMS is not permitted by law, then any action, claim, suit, or proceeding (\\u201cProceeding\\u201"
+    "d) concerning the Dispute may be commenced exclusively in the Courts. Each Party submits to the "
+    "exclusive jurisdiction of the Courts and waives the right to assert in any Proceeding, any claim"
+    " that it is not personally subject to the jurisdiction of the Courts, or that such Proceeding ha"
+    "s been commenced in an improper or inconvenient forum. \"], [\"sigfollow\", \"[SIGNATURE PAGE TO FOL"
+    "LOW]\"], [\"h\", \"SIGNATURES AND ACKNOWLEDGEMENTS\"], [\"sigp\", \"This Agreement contains a pre-disput"
+    "e arbitration clause. By executing this Agreement, the Parties agree that they acknowledge and u"
+    "nderstand the FINRA Pre-Dispute Arbitration Disclosure.\"]], \"buy\": [[\"top\", \"Buy-Side Secondary\\"
+    "u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\"
+    "u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0\\u00a0CONFIDENTIAL\"], [\"title\", \"AGENT AGREEMENT\"], [\"h"
+    "\", \"OVERVIEW\"], [\"p\", \"This Buy-Side Agent Agreement (\\u201cAgreement\\u201d) is made and entered"
+    " into as of Oct 1, 2026\\u00a0(\\u201cEffective Date\\u201d), by and between Rainmaker Securities, "
+    "LLC, a FINRA registered broker-dealer with CRD# 132995 (\\u201cRMS\\u201d) and \\u201cBuyer\\u201d w"
+    "ith a name and address as specified on the signature page to this Agreement. RMS and Buyer may e"
+    "ach be referred to individually as a \\u201cParty\\u201d and together as the \\u201cParties\\u201d.\""
+    "], [\"r\", \"Buyer seeks to purchase the \\u201cSecurities\\u201d of the \\u201cIssuer\\u201d, as defin"
+    "ed in Schedule A\\u00a0to this Agreement, which are sold pursuant to exemption from registration "
+    "under the Securities Act of 1933 (\\u201cSecurities Act\\u201d).\"], [\"r\", \"Buyer engages RMS as it"
+    "s non-exclusive agent to refer Buyer to potential sellers of the Securities (\\u201cSellers\\u201d"
+    "). \"], [\"r\", \"Upon completion of a direct sale, indirect transfer, or hypothecation of the Secur"
+    "ities involving a Referred Seller and the Buyer (\\u201cTransaction\\u201d), RMS shall be paid a c"
+    "ommission based upon the value of the consideration paid from the Buyer to the Seller within the"
+    " Transaction (\\u201cTransaction Value\\u201d).\"], [\"p\", \"In consideration of the mutual covenants"
+    ", promises and obligations set forth below, the Parties agree as follows:\"], [\"h\", \"TERMS AND CO"
+    "NDITIONS\"], [\"c\", \"Scope of Services.\", \"\\u00a0Buyer engages RMS as its non-exclusive agent to u"
+    "se commercially reasonable efforts to refer Buyer to potential Sellers that RMS reasonably belie"
+    "ves are ready, willing, and able to enter into a Transaction (the \\u201cServices\\u201d). On an a"
+    "s needed basis, and in furtherance of RMS performance of the Services, Buyer authorizes RMS to e"
+    "nter into fee sharing arrangements with third-party brokers, agents, and finders, provided that "
+    "no such arrangement shall result in any additional cost to Buyer beyond that which is contemplat"
+    "ed by this Agreement. Buyer acknowledges that RMS provides no representation, assurance, or warr"
+    "anty that a Referral will be made or Transaction will be completed.\\u00a0Buyer may accept or rej"
+    "ect any proposed Transaction for any reason or no reason in Buyer\\u2019s sole discretion. \"], [\""
+    "c\", \"Referred Seller.\", \"\\u00a0A Seller shall qualify as a Referred Seller if RMS or an existing"
+    " Referred Seller (each a \\u201cReferring Party\\u201d) makes a Referral to such Seller during the"
+    " term of this Agreement. \"], [\"s1\", \"A \\u201cReferral\\u201d shall be deemed to have occurred if:"
+    "\"], [\"s2\", \"Referring Party introduces such Seller to the Buyer, a Buyer\\u2019s affiliate, their"
+    " employees, officers, agents, representatives, or any person otherwise acting to facilitate the "
+    "Transaction on behalf of the Buyer (\\u201cBuyer\\u00a0Representatives\\u201d); or \"], [\"s2\", \"Refe"
+    "rring Party makes Buyer or Buyer Representatives aware of Seller\\u2019s interest in the sale of "
+    "Seller\\u2019s Securities.\"], [\"s1\", \"A Referred Seller shall also include any affiliate, subsidi"
+    "ary, related parties under common control of such Referred Seller, and entities owned or control"
+    "led by such Referred Seller.\"], [\"s1\", \"A Seller shall be disqualified as a Referred Seller if, "
+    "within two business days of a Referral, the Buyer can provide substantive, written evidence that"
+    " the Buyer had, previously and independently from the Referring Party efforts, been in mutual co"
+    "mmunications with the Seller regarding a Transaction for the Securities during the six-month per"
+    "iod prior to the Referral.\"], [\"c\", \"Success Fees.\", \"\\u00a0If a Referred Seller completes a Tra"
+    "nsaction within the \\u201cTail Period\\u201d, as defined in Schedule A\\u00a0to this Agreement, RM"
+    "S shall be paid a commission based upon the Transaction Value (\\u201cSuccess Fee\\u201d). The Suc"
+    "cess Fee shall be paid to RMS as follows:\"], [\"s1\", \"The Success Fee shall be calculated as defi"
+    "ned in Schedule A.\"], [\"s1\", \"The Success Fee shall be paid via wire transfer, in U.S. Dollars, "
+    "and in immediately available funds to the accounts and in the amounts set forth in the wire tran"
+    "sfer instructions provided by RMS.\"], [\"s1\", \"The Success Fee shall become due and payable concu"
+    "rrently with payment of the Transaction Value by the Buyer to the Seller, whether Transaction Va"
+    "lue is paid via the closing of escrow or via direct payment to the Seller.\"], [\"s1\", \"In the eve"
+    "nt escrow is used to complete a Transaction, the Buyer agrees, at the sole discretion and direct"
+    "ion of RMS, to include as irrevocable conditions to closing of escrow, the payment of the applic"
+    "able Success Fee due.\"], [\"c\", \"Late Fees.\", \"\\u00a0For each thirty-days an outstanding balance "
+    "remains due and payable by Buyer, RMS shall assess a late fee equal to the lesser of: (i) of fiv"
+    "e percent [5%]; or (ii) the maximum percentage allowable by applicable law (\\u201cLate Fee\\u201d"
+    "). \\u00a0The Late Fee shall be assessed on the total outstanding balance due and payable at each"
+    " thirty-day interval, including Late Fees previously assessed.\"], [\"c\", \"Non-Circumvention.\", \" "
+    "Buyer shall not circumvent, avoid, bypass or obviate RMS, directly or indirectly, to avoid payme"
+    "nt of fees, commission or any other form of compensation to RMS. Furthermore, Buyer shall not, a"
+    "nd Buyer shall not direct its affiliates, employees, directors, officers, partners, or advisors "
+    "to contact, solicit, or deal with any Referred Seller, directly or indirectly, in connection wit"
+    "h the purchase or sale of securities without express written authorization of RMS. During the Ta"
+    "il Period, Buyer shall not directly purchase, acquire, or otherwise enter into a Transaction for"
+    " any securities with a Referred Seller without RMS's prior written consent, or without ensuring "
+    "RMS is paid its applicable Success Fee upon the completion of such Transaction.\"], [\"c\", \"Termin"
+    "ation.\", \"\\u00a0This Agreement may be terminated by either Party upon delivery of written notice"
+    " at least thirty days prior to termination. Upon termination, RMS shall immediately cease solici"
+    "tation of Referrals on behalf of Buyer. Buyer\\u2019s obligation to pay any outstanding balance s"
+    "hall survive termination. Buyer\\u2019s obligation to pay Success Fees shall survive when: (i) th"
+    "e Referral occurred prior to termination; and (ii) the Transaction is initiated before the end o"
+    "f the Tail Period.\"], [\"h\", \"REPRESENTATIONS, WARRANTIES, AND COVENANTS\"], [\"c\", \"\", \"Mutual rep"
+    "resentations, warranties, and covenants of the Parties:\"], [\"s1\", \"This Agreement has been duly "
+    "authorized, executed, and delivered of its behalf, and is its legal, valid and binding agreement"
+    ", enforceable against it in accordance with its terms.\"], [\"s1\", \"Party is either a natural pers"
+    "on, or an entity that is duly organized, validly existing and in good standing under the laws of"
+    " the state of its jurisdiction of formation or organization and has full power and authority to "
+    "execute, deliver and perform its obligations under this Agreement. The Party\\u2019s performance "
+    "of its obligations under this Agreement will not conflict with, violate the terms of or constitu"
+    "te a default under: (A) its articles of incorporation, by-laws or similar governing documents; ("
+    "B) any other agreement or instrument to which it is a party or by which it is bound or to which "
+    "any of its property or assets are subject; or (C) any order, rule, law, regulation, or other leg"
+    "al requirement applicable to it or its property or assets.\"], [\"c\", \"\", \"Buyer represents, warra"
+    "nts to, and covenants with RMS as follows:\"], [\"s1\", \"Buyer has not entered into the Agreement a"
+    "s a result of any general solicitation by RMS.\\u00a0\"], [\"s1\", \"Buyer has entered into this Agre"
+    "ement in its sole discretion, and not as a result of any influence, advice, call to action, or r"
+    "ecommendation made by RMS or is representatives.\"], [\"s1\", \"Buyer is a sophisticated investor no"
+    "t in need of public protections afforded by SEC regulations. The Buyer has the financial ability"
+    " to bear the risk of loss in a contemplated Transaction or has extensive business experience wit"
+    "h access to the necessary information to make an informed decision regarding a contemplated Tran"
+    "saction. The Buyer is an \\u201caccredited investor\\u201d as defined under Rule 501(d) of the Sec"
+    "urities Act.\"], [\"s1\", \"Buyer agrees to provide RMS with the Buyer\\u2019s identity verification "
+    "information and Transaction documentation RMS reasonably deems required to maintain compliance w"
+    "ith applicable laws and regulations. \"], [\"s1\", \"Buyer has read and understands the required bro"
+    "ker-dealer disclosures located at www.rainmakersecurities.com/disclosures, including but not lim"
+    "ited to, the Relationship Summary.\"], [\"c\", \"\", \"RMS represents, warrants to, and covenants with"
+    " Buyer as follows:\"], [\"s1\", \"RMS agrees to maintain any and all registrations and licenses unde"
+    "r the relevant laws applicable to its operations in connection with the services performed pursu"
+    "ant to this Agreement including registration as a broker-dealer with the SEC, FINRA, and every s"
+    "tate or territory of the United States of America where such registration is required to complet"
+    "e a Transaction.\"], [\"s1\", \"RMS shall be responsible for supervising the activities of its assoc"
+    "iated persons that are conducted in furtherance of this Agreement to ensure compliance with appl"
+    "icable law.\"], [\"h\", \"MISCELLANEOUS TERMS AND CONDITIONS\"], [\"c\", \"Entire Agreement.\", \"\\u00a0Th"
+    "is Agreement, together with any Schedules, constitutes the entire agreement between the Parties "
+    "and supersedes, voids, and rescinds any and all prior oral or written agreements between RMS and"
+    " Buyer on the subject matter related to this Agreement, except with respect to any Non-Circumven"
+    "tion or Non-Disclosure Agreements executed between the Parties. This Agreement may not be amende"
+    "d nor modified except by the mutual written consent of the Parties.\"], [\"c\", \"Counterparts.\", \"\\"
+    "u00a0This Agreement may be executed in counterparts, each of which shall be deemed an original b"
+    "ut all of which shall constitute one and the same instrument.\"], [\"c\", \"Severability.\", \"\\u00a0A"
+    "ny provision of this Agreement that is prohibited or unenforceable in any jurisdiction shall, as"
+    " to such jurisdiction, be ineffective to the extent of such prohibition or unenforceability with"
+    "out invalidating the remaining provisions, and any such prohibition or unenforceability in any j"
+    "urisdiction shall not invalidate or render unenforceable such provision in any other jurisdictio"
+    "n.\"], [\"c\", \"Headings:\", \" \\u00a0Headings of this Agreement are for the convenience of the Parti"
+    "es only, and are not intended to be a part of or to affect the meanings or interpretation of thi"
+    "s Agreement.\"], [\"c\", \"Assignment and Successors.\", \"\\u00a0This Agreement shall be binding upon,"
+    " and shall inure to the benefit of the Parties hereto, their successors, permitted assigns and l"
+    "egal representatives as well as subsidiaries, affiliates, joint-ventures, heirs and any other re"
+    "lated parties or entities. This Agreement shall not be assigned by the Parties without prior mut"
+    "ual written consent.\"], [\"c\", \"Waiver.\", \"\\u00a0 The waiver by a Party of a breach of any provis"
+    "ion of this Agreement shall not operate nor be construed as a waiver of any subsequent breach by"
+    " a Party. The failure of a Party to insist upon strict adherence to any provision of this Agreem"
+    "ent shall not constitute a waiver or thereafter deprive such Party of the right to insist upon a"
+    " strict adherence.\"], [\"c\", \"Privacy Notice.\", \"\\u00a0To help the government fight the funding o"
+    "f terrorism and money laundering activities, federal law requires all financial institutions to "
+    "obtain, verify, and record information about the identities of individuals and institutions with"
+    " which it does business. Therefore, RMS will verify the information provided by the counterparty"
+    " of this Agreement through publicly available private and government sources.\"], [\"c\", \"Notice t"
+    "o the Parties.\", \"\\u00a0The \\u201cwritten notice\\u201d requirement of this Agreement shall be sa"
+    "tisfied if received at the Party\\u2019s address or email specified on the signature page, or, if"
+    " to Buyer, (i) via email sent to Buyer\\u2019s account last known to RMS, or (ii) by letter sent "
+    "via post or courier to the Buyer\\u2019s address last known to RMS.\"], [\"c\", \"Relationship of Par"
+    "ties.\", \"\\u00a0Neither Party may legally bind the other Party, unless expressly authorized in wr"
+    "iting. No joint venture, partnership, employment, or any other relationship, including any clear"
+    "ing arrangement, is intended, accomplished or embodied in this Agreement. Both Parties may have "
+    "similar dealings with other parties and their relationship is only exclusive to the extent speci"
+    "fied in the Agreement.\"], [\"c\", \"Indemnification.\", \"\\u00a0Each Party agrees to indemnify, defen"
+    "d and hold harmless the other Party (including its respective affiliates, directors, officers, e"
+    "mployees, successors and agents) from and against any and all losses, claims, expenses, damages "
+    "and liabilities (including reasonable attorney fees and disbursements and other expenses for inv"
+    "estigating or defending any actions or threatened actions) to which such other Party may become "
+    "subject based upon, arising out of or otherwise in respect of the other Party\\u2019s willful mis"
+    "conduct, gross negligence, fraudulent or criminal act, or a material breach by the Party of the "
+    "provisions of this Agreement. This indemnity is in addition to any liability that each Party may"
+    " otherwise have to the other and shall survive termination of this Agreement. Parties agree to n"
+    "otify each other, in writing, within fifteen days of any claim asserted or any legal action comm"
+    "enced against it in connection with this Agreement. The indemnifying Party shall not be liable t"
+    "o indemnify the other Party for an aggregate amount of losses in excess of the total value of th"
+    "e Success Fees which were paid or made payable under the Agreement.\"], [\"c\", \"Governing Law and "
+    "Jurisdiction.\", \" This Agreement shall be construed and governed in accordance with the laws of "
+    "the State of Delaware, without reference to its conflict of laws provisions. The Parties submit "
+    "to the exclusive jurisdiction of the state or federal courts located in the State of Delaware (\\"
+    "u201cCourts\\u201d).\"], [\"c\", \"Arbitration.\", \" By signing this Agreement, the Buyer acknowledges"
+    " and agrees to the following:\"], [\"s1\", \"All Parties to this Agreement are giving up the right t"
+    "o sue each other in court, including the right to a trial by jury, except as provided by the rul"
+    "es of the arbitration forum in which a claim is filed.\"], [\"s1\", \"Arbitration awards are general"
+    "ly final and binding; a Party's ability to have a court reverse or modify an arbitration award i"
+    "s very limited.\"], [\"s1\", \"The ability of the Parties to obtain documents, witness statements an"
+    "d other discovery is generally more limited in arbitration than in court proceedings.\"], [\"s1\", "
+    "\"The arbitrators do not have to explain the reason(s) for their award unless, in an eligible cas"
+    "e, a joint request for an explained decision has been submitted by all Parties to the panel at l"
+    "east 20 days prior to the first scheduled hearing date.\"], [\"s1\", \"The panel of arbitrators may "
+    "include a minority of arbitrators who were or are affiliated with the securities industry.\"], [\""
+    "s1\", \"The rules of some arbitration forums may impose time limits for bringing a claim in arbitr"
+    "ation. In some cases, a claim that is ineligible for arbitration may be brought in court.\"], [\"s"
+    "1\", \"The rules of the arbitration forum in which the claim is filed, and any amendments thereto,"
+    " shall be incorporated into this agreement.\"], [\"s1\", \"No person shall bring a putative or certi"
+    "fied class action to arbitration, nor seek to enforce any pre-dispute arbitration agreement agai"
+    "nst any person who has initiated in court a putative class action; or who is a member of a putat"
+    "ive class who has not opted out of the class with respect to any claims encompassed by the putat"
+    "ive class action until: (i) the class certification is denied; or (ii) the class is decertified;"
+    " or (iii) the customer is excluded from the class by the court. Such forbearance to enforce an a"
+    "greement to arbitrate shall not constitute a waiver of any rights under this agreement except to"
+    " the extent stated herein.\"], [\"s1\", \"Any dispute, claim or controversy arising out of or relati"
+    "ng to this Agreement or the breach, termination, enforcement, interpretation or validity of the "
+    "Agreement, including the determination of the scope or applicability of this agreement to arbitr"
+    "ate, whether brought against a Party or its respective affiliates, employees or agents (\\u201cDi"
+    "spute\\u201d), shall be submitted to FINRA arbitration and conducted in accordance with the FINRA"
+    " Code of Arbitration Procedure for Customer Disputes (\\u201cFINRA Code\\u201d). In the event the "
+    "FINRA Director of Arbitration finds that such Dispute is ineligible for arbitration under the FI"
+    "NRA Code, then the Dispute shall be administered by JAMS pursuant to its Comprehensive Arbitrati"
+    "on Rules and Procedures and in accordance with the Expedited Procedures in those Rules (\\u201cJA"
+    "MS Rules\\u201d). Arbitration under the JAMS Rules shall be held in Los Angeles, California befor"
+    "e three arbitrators. Judgment on the award shall be final and may be entered in any court having"
+    " jurisdiction. This clause shall not preclude either Party from seeking provisional remedies in "
+    "aid of arbitration from the Courts. \"], [\"s1\", \"If arbitration of the Dispute pursuant to the FI"
+    "NRA Code and JAMS Rules is not permitted by law, then any action, claim, suit, or proceeding (\\u"
+    "201cProceeding\\u201d) concerning the Dispute may be commenced exclusively in the Courts. Each Pa"
+    "rty submits to the exclusive jurisdiction of the Courts and waives the right to assert in any Pr"
+    "oceeding, any claim that it is not personally subject to the jurisdiction of the Courts, or that"
+    " such Proceeding has been commenced in an improper or inconvenient forum. \"], [\"sigfollow\", \"[SI"
+    "GNATURE PAGE TO FOLLOW]\"], [\"h\", \"SIGNATURES AND ACKNOWLEDGEMENTS\"], [\"sigp\", \"This Agreement co"
+    "ntains a pre-dispute arbitration clause. By executing this Agreement, the Parties agree to submi"
+    "t to arbitration in the event of a dispute.\"]], \"securities_full\": \"The securities of the Issuer"
+    ", or the interests in an entity holding the securities of the Issuer, whether directly or indire"
+    "ctly.\", \"securities_sched\": \"The securities of the Issuer.\", \"sell_version\": \"v20251125\", \"buy_v"
+    "ersion\": \"\"}"
+)
 
 # Plain JS, deliberately NOT inside an f-string: braces are literal here.
 ENG_JS = r"""
@@ -4479,6 +4887,144 @@ ENG_JS = r"""
     $('preview').innerHTML = out;
   }
 
+  // ── Print version: the complete document in a new tab, built from the template
+  // text (verbatim, ENG_PRINT_TEMPLATES) plus the current form values. Client-side only.
+  var PT = JSON.parse(document.getElementById('eng-print').textContent);
+  function roman(n) {
+    return ['', 'i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x', 'xi', 'xii'][n] || String(n);
+  }
+  function letter(n) { return String.fromCharCode(96 + n); }
+  function blank(v, wide) {
+    return v ? esc(v) : '<span class="ul' + (wide ? ' wide' : '') + '"></span>';
+  }
+  function printDoc() {
+    var full = isFull(), sd = side(), Party = sd === 'buy' ? 'Buyer' : 'Seller';
+    var T = PT[sd], ent = ptype() === 'entity';
+    var date = $('f-date').value.trim(), signer = val('f-signer'), entity = val('f-entity');
+    var title = $('f-title').value.trim(), a1 = $('f-addr1').value.trim(), a2 = $('f-addr2').value.trim();
+    var phone = $('f-phone').value.trim(), issuer = val('f-issuer-legal'), structure = $('f-structure').value;
+    var tail = $('f-tail').value.trim(), txn = full ? '1' : $('f-txn').value.trim();
+    var h = [], sec = 0, clause = 0, sub1 = 0, sub2 = 0, rec = 0, firstP = true;
+    var top = T.filter(function (b) { return b[0] === 'top'; })[0][1].split(/[\s ]{2,}/);
+    var topHtml = '<div class="top"><span>' + esc(top[0]) + '</span><span>' + esc(top[top.length - 1]) + '</span></div>';
+    if (full) {
+      T.forEach(function (b) {
+        var k = b[0];
+        if (k === 'top') { h.push(topHtml); return; }
+        if (k === 'title') { h.push('<div class="title">' + esc(b[1]) + '</div>'); return; }
+        if (k === 'h') {
+          sec++; clause = 0; rec = 0;
+          if (/^SIGNATURES/.test(b[1])) {
+            h.push('<section class="sigpage"><h2>' + sec + '. ' + esc(b[1]) + '</h2>');
+          } else {
+            h.push('<h2>' + sec + '. ' + esc(b[1]) + '</h2>');
+          }
+          return;
+        }
+        if (k === 'p') {
+          var t = b[1];
+          if (firstP) {
+            firstP = false;
+            var m = t.match(/as of (.+?)([\s ])\(“Effective Date”\)/);
+            if (m) {
+              h.push('<p>' + esc(t.slice(0, m.index + 6)) + '<b class="fill">' + (date ? esc(date) : '<span class="ul"></span>') + '</b>' +
+                     esc(t.slice(m.index + 6 + m[1].length)) + '</p>');
+              return;
+            }
+          }
+          h.push('<p class="' + (clause ? 'cont' : '') + '">' + esc(t) + '</p>');
+          return;
+        }
+        if (k === 'r') { rec++; h.push('<p class="rec"><span class="n">' + String.fromCharCode(64 + rec) + '.</span>' + esc(b[1]) + '</p>'); return; }
+        if (k === 'c') {
+          clause++; sub1 = 0;
+          h.push('<p class="cl"><span class="n">' + clause + '.</span>' + (b[1] ? '<b>' + esc(b[1]) + '</b>' : '') + esc(b[2]) + '</p>');
+          return;
+        }
+        if (k === 's1') { sub1++; sub2 = 0; h.push('<p class="s1"><span class="n">(' + letter(sub1) + ')</span>' + esc(b[1]) + '</p>'); return; }
+        if (k === 's2') { sub2++; h.push('<p class="s2"><span class="n">(' + roman(sub2) + ')</span>' + esc(b[1]) + '</p>'); return; }
+        if (k === 'sigfollow') { h.push('<p class="sigfollow">' + esc(b[1]) + '</p>'); return; }
+        if (k === 'sigp') {
+          var addr = '<tr><td>Address:</td><td>' + blank(a1, 1) + '<br>' + blank(a2, 1) + '</td></tr>' +
+                     '<tr><td>Phone:</td><td>' + blank(phone, 1) + '</td></tr>';
+          var blk = ent
+            ? '<div class="entname">' + (entity ? esc(entity.toUpperCase()) : '<span class="ul wide"></span>') + '</div><table class="sig">' +
+              '<tr><td>By:</td><td><span class="ul wide"></span></td></tr>' +
+              '<tr><td>Name:</td><td>' + blank(signer, 1) + '</td></tr>' +
+              '<tr><td>Title:</td><td>' + blank(title, 1) + '</td></tr>' + addr + '</table>'
+            : '<table class="sig"><tr><td></td><td><span class="ul wide"></span> (Signature)</td></tr>' +
+              '<tr><td>Name:</td><td>' + blank(signer, 1) + '</td></tr>' + addr + '</table>';
+          h.push('<p><i>' + esc(b[1]) + '</i></p>' + blk +
+            '<div class="rms"><b>RAINMAKER SECURITIES, LLC</b><br>' +
+            '<b>By: Glen Anderson, President</b><br>382 NE 191st St. #86647 Miami, FL 33179-3899</div></section>');
+          return;
+        }
+      });
+    }
+    // Schedule A — labels and text from the template table.
+    var rows = [], fees = '';
+    for (var i = 0; i < 4; i++) fees += '<li>' + esc(feeLine(i)) + '</li>';
+    rows.push(['Issuer.', blank(issuer, 1)]);
+    rows.push(['Securities.', esc(full ? PT.securities_full : PT.securities_sched)]);
+    rows.push(['Success Fee.', 'The Success Fee shall be calculated as:<ul>' + fees + '</ul>']);
+    if ($('f-min-on').checked) rows.push(['Minimum Commission.', esc(money($('f-min-amt').value))]);
+    if ($('f-scope-on').checked) rows.push(['Scope of Coverage.', esc('For the avoidance of doubt (see Section ' + C.noncirc_section[sd] +
+      ', Non-Circumvention), the scope of this Agreement and any Success Fee obligations extend to any and all ' +
+      'transactions, securities sales, or fund allocations completed between ' +
+      (sd === 'buy' ? 'Buyer and any Referred Seller' : 'Seller and any Referred Buyer') +
+      ' during the Tail Period, regardless of whether the specific Issuer or security was listed on Schedule A at the time of Referral.')]);
+    rows.push(['Tail Period', 'The ' + (tail ? esc(tail) : '<span class="ul short"></span>') + ' month period after the Referral.']);
+    rows.push(['Anticipated Structure', blank(structure)]);
+    rows.push(['Initials.', '<table class="init"><tr><td>' + Party + ':</td><td><span class="ul"></span></td><td>Date:</td><td><span class="ul"></span></td></tr>' +
+      '<tr><td>RMS:</td><td><span class="ul"></span></td><td>Date:</td><td><span class="ul"></span></td></tr></table>']);
+    h.push('<section class="sched' + (full ? ' brk' : '') + '">' + (full ? '' : topHtml) +
+      '<div class="title">SCHEDULE A</div><div class="title">TRANSACTION ' + (txn ? esc(txn) : '<span class="ul short"></span>') + '</div>' +
+      '<table class="sa">' + rows.map(function (r, n) {
+        return '<tr><th>' + (n + 1) + '. ' + r[0] + '</th><td>' + r[1] + '</td></tr>';
+      }).join('') + '</table>' + (full && PT[sd + '_version'] ? '<div class="ver">' + esc(PT[sd + '_version']) + '</div>' : '') + '</section>');
+
+    var who = ent ? entity : signer, co = $('f-issuer').value.trim();
+    var docTitle = (full ? (sd === 'buy' ? 'Buy-Side Agent Agreement' : 'Sell-Side Secondary Agent Agreement')
+                         : (sd === 'buy' ? 'Schedule A - Buy Side' : 'Schedule A - Sell Side')) +
+                   (who ? ' - ' + who : '') + (co ? ' - ' + co : '');
+    var css = '@page{size:Letter;margin:1in}' +
+      'html,body{background:#fff;color:#000;margin:0}' +
+      'body{font-family:Arial,Helvetica,sans-serif;font-size:11pt;line-height:1.4}' +
+      '.doc{max-width:6.5in;margin:0 auto;padding:24px 0}' +
+      '.note{font:13px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#fff8d6;border:1px solid #e9d98a;' +
+        'padding:8px 12px;border-radius:6px;margin:12px auto;max-width:6.5in}' +
+      '@media print{.note{display:none}.doc{padding:0;max-width:none}}' +
+      '.top{display:flex;justify-content:space-between;font-weight:700;margin-bottom:18px}' +
+      '.title{text-align:center;font-weight:700;margin:6px 0 12px}' +
+      'h2{font-size:11pt;font-weight:700;margin:16px 0 8px}' +
+      'p{margin:0 0 8px;text-align:justify}' +
+      'p .n{display:inline-block;min-width:0.35in;text-indent:0}' +
+      'p.rec{padding-left:0.35in;text-indent:-0.35in}' +
+      'p.cl{padding-left:0.35in;text-indent:-0.35in}' +
+      'p.cont{padding-left:0.35in}' +
+      'p.s1{padding-left:0.75in;text-indent:-0.4in}' +
+      'p.s2{padding-left:1.15in;text-indent:-0.4in}' +
+      'p.sigfollow{text-align:center;margin-top:16px}' +
+      '.sigpage,.sched.brk{break-before:page;page-break-before:always}' +
+      '.entname{font-weight:700;margin:28px 0 10px}' +
+      'table.sig{border-collapse:collapse;margin-top:6px}table.sig td{padding:5px 8px 5px 0;vertical-align:bottom}' +
+      'table.sig td:first-child{width:0.8in}' +
+      '.rms{margin-top:36px}' +
+      '.ul{display:inline-block;width:1.6in;border-bottom:1px solid #000;height:1.1em;vertical-align:bottom}' +
+      '.ul.wide{width:3in}.ul.short{width:0.5in}' +
+      'table.sa{width:100%;border-collapse:collapse;margin-top:10px}' +
+      'table.sa th,table.sa td{border:1px solid #000;padding:8px 10px;vertical-align:top;text-align:left}' +
+      'table.sa th{width:32%;font-weight:700}table.sa ul{margin:4px 0 0 18px;padding:0}' +
+      'table.init{border-collapse:collapse}table.init td{border:none;padding:6px 8px 6px 0;vertical-align:bottom}' +
+      '.ver{font-size:8pt;margin-top:24px;color:#444}';
+    var out = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>' + esc(docTitle) + '</title>' +
+      '<style>' + css + '</style></head><body><div class="note">Cmd+P → Save as PDF</div><div class="doc">' +
+      h.join('') + '</div></body></html>';
+    var w = window.open('', '_blank');
+    if (!w) { alert('Allow pop-ups for this page to open the print version.'); return; }
+    w.document.open(); w.document.write(out); w.document.close();
+  }
+
   // ── Wire up ──
   $('f-date').value = todayNY();
   setFees(C.fees_standard);
@@ -4498,6 +5044,7 @@ ENG_JS = r"""
   });
   ['f-addr1', 'f-addr2'].forEach(function (id) { $(id).addEventListener('input', function () { st.dirty.addr = true; }); });
   $('f-phone').addEventListener('input', function () { st.dirty.phone = true; });
+  $('print-btn').addEventListener('click', printDoc);
   $('f-min-on').addEventListener('change', function () { $('f-min-amt').disabled = !this.checked; });
   document.querySelectorAll('#eng-form input, #eng-form select').forEach(function (el) {
     el.addEventListener('input', preview);
@@ -4529,6 +5076,7 @@ def render_engagement():
     const_json = json.dumps({"fee_templates": ENG_FEE_TEMPLATES, "fees_standard": ENG_FEES_STANDARD,
                              "fees_generous": ENG_FEES_GENEROUS,
                              "noncirc_section": ENG_NONCIRC_SECTION}).replace("</", "<\\/")
+    print_json = ENG_PRINT_TEMPLATES_JSON.replace("</", "<\\/")
     c = counts
     meta = (f'{c["deals_live"]} live deals (of {c["deals_total"]}) · '
             f'{c["deals_closed"] if c["closed_ok"] else "no"} closed deals · {c["companies"]} companies · '
@@ -4595,6 +5143,8 @@ def render_engagement():
       .pv-tbl ul { margin:4px 0 0 18px; }
       .pv-init { border-collapse:collapse; }
       .pv-init td { padding:4px 6px 4px 0; vertical-align:bottom; }
+      .print-btn { margin:8px 8px 0 0; font:inherit; font-size:14px; font-weight:600; padding:10px 16px;
+        border-radius:8px; border:1px solid var(--ink); background:var(--ink); color:#fff; cursor:pointer; }
       .gen-btn { margin-top:8px; font:inherit; font-size:14px; font-weight:600; padding:10px 16px;
         border-radius:8px; border:1px solid var(--line); background:#eeece7; color:#9a978f; cursor:not-allowed; }
     </style>"""
@@ -4667,12 +5217,14 @@ def render_engagement():
           <input type="number" id="f-txn" min="1"></div>
         <div class="row"><label class="lbl" for="f-date">Date</label>
           <input type="text" id="f-date"></div>
+        <button type="button" class="print-btn" id="print-btn">Print version</button>
         <button type="button" class="gen-btn" disabled>Generate (coming next)</button>
       </form>
       <div class="eng-preview" id="preview"></div>
     </div>
     <script type="application/json" id="eng-data">{data_json}</script>
     <script type="application/json" id="eng-const">{const_json}</script>
+    <script type="application/json" id="eng-print">{print_json}</script>
     <script>""" + ENG_JS + "</script>"
     return html_response(body, eyebrow="Admin", is_admin=True, view="engagement")
 
