@@ -1766,42 +1766,10 @@ def _fetch_demand_data():
     return data
 
 
-# Client standing (commission tier) straight from syndicate-dash's admin-gated
-# &view=standing_json route -- computed there, never here. Cached per request only:
-# lambda_handler clears this at the start of every invocation, so the Profile page
-# and the watchlist link share one fetch without ever serving stale standing.
-_standing_cache = {}
-
-
-def _fetch_standing(person_id):
-    """The client's standing dict when syndicate-dash says visible:true, else None.
-    Fail-soft: missing key, timeout, bad JSON, empty or visible:false -> None."""
-    pid = str(person_id or "").strip()
-    if not pid:
-        return None
-    if pid in _standing_cache:
-        return _standing_cache[pid]
-    data = None
-    if SYNDICATE_DASH_URL:
-        try:
-            req = urllib.request.Request(SYNDICATE_DASH_URL + "&view=standing_json&pid="
-                                         + urllib.parse.quote(pid, safe=""))
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                raw = resp.read().decode()
-            parsed = json.loads(raw) if raw.strip() else None
-            if isinstance(parsed, dict) and parsed.get("visible") is True:
-                data = parsed
-        except Exception as e:
-            print(f"Standing: fetch failed (non-fatal): {e}")
-    else:
-        print("Standing: ADMIN_KEY not set; skipping syndicate-dash fetch")
-    _standing_cache[pid] = data
-    return data
-
-
-# "Your status" card on the Portfolio & Watchlist view: same standing_json route,
-# but cached per person_id for 5 minutes in module memory (survives across
-# invocations of a warm container, unlike _standing_cache above).
+# "Your status" card on the Profile page (and the tier line on Portfolio &
+# Watchlist): the ONE standing fetch path. standing_json from syndicate-dash
+# (computed there, never here), cached per person_id for 5 minutes in module
+# memory (survives across invocations of a warm container).
 _STATUS_CARD_TTL_SECONDS = 5 * 60
 _status_card_cache = {}
 
@@ -1836,6 +1804,66 @@ def _fetch_status_card_standing(person_id):
     return data
 
 
+def _post_standing_share(person_id, share):
+    """POST syndicate-dash ?action=standing_share for this person_id (admin key
+    stays server-side in SYNDICATE_DASH_URL). Returns the new standing_json
+    payload, or None on any failure. Clears then reseeds the 5-minute cache
+    entry from the returned payload so the next render shows the change."""
+    pid = str(person_id or "").strip()
+    if not pid or not SYNDICATE_DASH_URL:
+        print("standing share failed: no pid or ADMIN_KEY not set")
+        return None
+    _status_card_cache.pop(pid, None)
+    try:
+        req = urllib.request.Request(
+            SYNDICATE_DASH_URL + "&action=standing_share",
+            data=json.dumps({"pid": pid, "share": bool(share)}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.status != 200:
+                raise ValueError(f"HTTP {resp.status}")
+            parsed = json.loads(resp.read().decode())
+        if not isinstance(parsed, dict) or parsed.get("share_with_sellers") is not bool(share):
+            raise ValueError("unexpected response")
+    except Exception as e:
+        print(f"standing share failed: {type(e).__name__}: {e}")
+        return None
+    _status_card_cache[pid] = (time.monotonic(), parsed if parsed.get("visible") is True else None)
+    return parsed
+
+
+_SHARE_LABEL = "Share my standing with sellers I'm matched with"
+_SHARE_HELP = ("When your bid matches a seller's shares, that seller will see which of the items above "
+               "you've completed, shown as simple check marks. Sellers often prioritize buyers whose "
+               "onboarding is already in place. Your standing is never published or shown to anyone "
+               "else, and it never includes your trades, amounts, tier or referrals. You can turn this "
+               "off at any time.")
+
+
+def _share_toggle_html(st, viewing_as=False, share_err=False):
+    """The consent toggle inside the Profile card. A small form POST to this
+    desk route (action=standing_share) -- no key in the page. Disabled when an
+    admin is viewing as the client: consent must come from the client."""
+    on = st.get("share_with_sellers") is True
+    dis = " disabled" if viewing_as else ""
+    note = ""
+    if viewing_as:
+        note = '<span class="share-note">Only the client can change this.</span>'
+    elif share_err:
+        note = '<span class="share-note share-err">Couldn&rsquo;t save &mdash; please try again.</span>'
+    return (
+        '<form class="share" method="POST" action="?view=profile">'
+        '<input type="hidden" name="action" value="standing_share">'
+        '<label class="share-row"><input type="checkbox" name="share" value="1"'
+        f'{" checked" if on else ""}{dis} onchange="this.form.submit()"> '
+        f'<span>{html.escape(_SHARE_LABEL)}</span></label>'
+        f'<p class="share-help">{html.escape(_SHARE_HELP)}</p>'
+        + note
+        + ('' if viewing_as else '<noscript><button type="submit">Save</button></noscript>')
+        + '</form>'
+    )
+
+
 _STATUS_CARD_CSS = """
   .cts.ys { margin: 0 0 18px; }
   .cts.ys .status { padding: 18px; gap: 12px; }
@@ -1844,12 +1872,19 @@ _STATUS_CARD_CSS = """
   .cts.ys .note a { color: inherit; }
   .cts.ys .foot { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
   .cts.ys, .cts.ys * { overflow-wrap: anywhere; }
+  .cts.ys .share { border-top: 1px solid var(--rule); padding-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+  .cts.ys .share-row { display: flex; align-items: flex-start; gap: 8px; font-weight: 500; cursor: pointer; }
+  .cts.ys .share-row input { margin-top: 4px; }
+  .cts.ys .share-help { font-size: 13px; color: var(--muted); margin: 0; }
+  .cts.ys .share-note { font-size: 13px; color: var(--muted); }
+  .cts.ys .share-err { color: #b23b3b; }
   @media (max-width: 480px) { .cts.ys .status { padding: 14px; } }
 """
 
 
-def _render_status_card(person_id):
-    """The "Your status" card HTML, or "" when there's nothing to show. Never raises."""
+def _render_status_card(person_id, viewing_as=False, share_err=False):
+    """The "Your status" card HTML (with the sellers-sharing toggle below the
+    items), or "" when there's nothing to show. Never raises."""
     try:
         st = _fetch_status_card_standing(person_id)
         if not st:
@@ -1886,6 +1921,7 @@ def _render_status_card(person_id):
             '<div class="cts ys"><div class="status">'
             f'<div class="status-head"><span class="who">Your status</span>{pill}</div>'
             + (f'<ul class="checks">{lis}</ul>' if lis else "")
+            + _share_toggle_html(st, viewing_as, share_err)
             + '<div class="foot">'
             + (f'<p><a href="{tiers_href}" target="_blank" rel="noopener">How tiers work &rarr;</a></p>'
                if tiers_href else "")
@@ -2567,6 +2603,50 @@ def session_cookie(client_id):
 
 def admin_cookie(admin_id):
     return _cookie(ADMIN_COOKIE_NAME, make_admin_cookie(admin_id), ADMIN_DAYS)
+
+
+VIEW_AS_COOKIE_NAME = "gg_view_as"
+VIEW_AS_DAYS = 1
+
+
+def make_view_as_cookie(admin_id, view_pid):
+    """Signed, expiring admin "view as" marker: base64url("viewas"|admin|pid|exp).sig.
+    Same HMAC construction as the session/admin cookies; the "viewas" first field
+    keeps it from verifying as either of them."""
+    payload = f"viewas|{admin_id}|{view_pid}|{int(time.time()) + VIEW_AS_DAYS * 86400}"
+    p = _b64u(payload.encode())
+    sig = hmac.new(HMAC_SECRET.encode(), p.encode(), hashlib.sha256).digest()
+    return f"{p}.{_b64u(sig)}"
+
+
+def read_view_as_cookie(value, admin_id):
+    """The viewed client's id if the cookie is validly signed, unexpired and was
+    minted for THIS admin, else None."""
+    try:
+        if not admin_id:
+            return None
+        p, s = (value or "").split(".", 1)
+        expected = hmac.new(HMAC_SECRET.encode(), p.encode(), hashlib.sha256).digest()
+        if not hmac.compare_digest(_b64u(expected), s):
+            return None
+        parts = _b64u_decode(p).decode().split("|")
+        if len(parts) != 4 or parts[0] != "viewas" or parts[1] != admin_id:
+            return None
+        if int(parts[3]) < int(time.time()):
+            return None
+        return parts[2] or None
+    except Exception:
+        return None
+
+
+def _request_admin_id(event):
+    """The admin's own client_id when this browser holds admin privilege (same
+    test _route uses for is_admin), else None."""
+    client_id = read_session(get_cookie(event, COOKIE_NAME))
+    admin_id = read_admin_cookie(get_cookie(event, ADMIN_COOKIE_NAME))
+    if admin_id:
+        return admin_id
+    return client_id if client_id in ADMIN_CLIENT_IDS else None
 
 
 def get_cookie(event, name):
@@ -4126,10 +4206,11 @@ def _safe_href(url):
     return ""
 
 
-def render_profile(client_id, is_admin):
-    """Signed-in client's Profile: who they're signed in as plus a 'Your client
-    status' card from syndicate-dash's standing_json. Standing is never computed
-    here; with no visible standing (or any error) the client sees one soft line."""
+def render_profile(client_id, is_admin, viewing_as=False, share_err=False):
+    """Signed-in client's Profile: who they're signed in as plus the "Your
+    status" card (_render_status_card, standing_json via the 5-minute cache)
+    with the sellers-sharing toggle. Standing is never computed here; with no
+    visible standing (or any error) the client sees one soft line."""
     email = ""
     try:
         rec = lookup_person(client_id)
@@ -4139,53 +4220,7 @@ def render_profile(client_id, is_admin):
         print(f"Profile: person lookup failed (non-fatal): {e}")
     who = html.escape(email) if email else html.escape(display_name(client_id))
 
-    card = ""
-    try:
-        st = _fetch_standing(client_id)
-        if st:
-            tier_label = str(st.get("tier_label") or st.get("tier") or "").strip()
-            if st.get("tier"):
-                pill = html.escape(tier_label)
-                try:
-                    pct = float(st.get("discount_pct"))
-                    pct_txt = f"{pct:g}"
-                except (TypeError, ValueError):
-                    pct_txt = ""
-                headline = (f'<p class="next"><b>{html.escape(pct_txt)}% off</b> my standard commission</p>'
-                            if pct_txt else "")
-            elif st.get("good_standing"):
-                pill, headline = "Good standing", ""
-            else:
-                pill, headline = "Working toward Preferred", ""
-            lis = ""
-            for it in (st.get("items") or []):
-                if not isinstance(it, dict):
-                    continue
-                label = html.escape(str(it.get("label") or ""))
-                note = html.escape(str(it.get("note") or ""))
-                href = _safe_href(it.get("form_url"))
-                extra = ""
-                if note:
-                    extra += f'<span class="note">{note}</span>'
-                if href:
-                    extra += (f'<span class="note"><a href="{href}" target="_blank" '
-                              'rel="noopener">Complete this form</a></span>')
-                mark = _CTS_TICK if it.get("done") else '<span></span>'
-                lis += f'<li>{mark}<div>{label}{extra}</div></li>'
-            tiers_href = _safe_href(st.get("tiers_url"))
-            card = (
-                '<div class="status">'
-                '<div class="status-head"><span class="who">Your client status</span>'
-                f'<span class="pill">{pill}</span></div>'
-                + headline
-                + (f'<ul class="checks">{lis}</ul>' if lis else "")
-                + (f'<p class="next"><a href="{tiers_href}" target="_blank" rel="noopener">'
-                   'How client tiers work</a></p>' if tiers_href else "")
-                + '</div>'
-            )
-    except Exception as e:
-        print(f"Profile: standing render failed (non-fatal): {e}")
-        card = ""
+    card = _render_status_card(client_id, viewing_as=viewing_as, share_err=share_err)
     if not card:
         card = ('<p>Your client status will appear here soon. Questions? Email '
                 '<a href="mailto:cgracia@rainmakersecurities.com">cgracia@rainmakersecurities.com</a>.</p>')
@@ -5327,16 +5362,22 @@ def render_watchlist_status(client_id, is_admin=False):
                 '<a class="btn-secondary" href="?view=watchlist">+ Build your watchlist</a>'
                 '</div>')
 
-    status_link = ""
+    # One slim tier line, only when a tier is set; the full status lives on Profile.
+    tier_line = ""
     try:
-        if _fetch_standing(client_id):
-            status_link = ('<p style="text-align:right; font-size:13px; margin-bottom:6px;">'
-                           '<a href="?view=profile" style="color:var(--ink);">'
-                           'Your client status &rarr;</a></p>')
+        _st = _fetch_status_card_standing(client_id)
+        if _st and _st.get("tier") is not None:
+            _lbl = str(_st.get("tier_label") or _st.get("tier") or "").strip()
+            try:
+                _pct = f"{float(_st.get('discount_pct')):g}% off"
+            except (TypeError, ValueError):
+                _pct = ""
+            _txt = " · ".join(x for x in (_lbl, _pct) if x)
+            tier_line = ('<p class="wl-tierline" style="font-size:13px; margin-bottom:10px;">'
+                         + html.escape(_txt) + (" · " if _txt else "")
+                         + '<a href="?view=profile" style="color:var(--ink);">See your status &rarr;</a></p>')
     except Exception as e:
-        print(f"watchlist status: standing link skipped: {e}")
-
-    standing_card = _render_status_card(client_id)
+        print(f"watchlist status: tier line skipped: {e}")
 
     return html_response(f"""
     <style>
@@ -5392,7 +5433,7 @@ def render_watchlist_status(client_id, is_admin=False):
     <style>
       .wl-spacer {{ display: none; }}
     </style>
-    {standing_card}{status_link}{body}
+    {tier_line}{body}
     """, is_admin=is_admin, view="watchlist_status", client_id=client_id)
 
 
@@ -5548,6 +5589,16 @@ def _route(event, context):
         if action in ("get_bids", "get_offers"):
             notify_interest(portfolio, client_id, form.get("holding_id", ""), action)
             return _json_ok()
+        # Sellers-sharing consent from the Profile card. Only ever the signed-in
+        # client's OWN person_id; an admin viewing as a client (?as= or a
+        # magic-link session swap) is refused -- consent must come from the client.
+        if action == "standing_share":
+            if is_admin and not effective_admin:
+                return {"statusCode": 303, "headers": {"Location": raw_path + "?view=profile"}, "body": ""}
+            ok = _post_standing_share(client_id, form.get("share") == "1") is not None
+            return {"statusCode": 303,
+                    "headers": {"Location": raw_path + "?view=profile" + ("" if ok else "&share_err=1")},
+                    "body": ""}
         if action == "feature_request":
             notify_feature(portfolio, client_id, form.get("message", ""))
             return _json_ok()
@@ -5965,7 +6016,8 @@ def _route(event, context):
     if qs.get("view") == "demand":
         return render_demand_board(view_id, effective_admin)
     if qs.get("view") == "profile":
-        return render_profile(view_id, effective_admin)
+        return render_profile(view_id, effective_admin, viewing_as=(is_admin and not effective_admin),
+                              share_err=qs.get("share_err") == "1")
     if qs.get("view") == "admin" and is_admin:
         return render_admin_hub()
     if qs.get("view") == "auctions" and is_admin:
@@ -6285,7 +6337,6 @@ def lambda_handler(event, context):
     a missing bar must never cost the user their page."""
     # Old Syndicate Dash address: permanent redirect to /blockbook, ahead of all
     # other routing. Exact prefix only (/dashboards, /dashboard-x fall through).
-    _standing_cache.clear()
     raw_path = event.get("rawPath") or "/"
     if raw_path == "/dashboard" or raw_path.startswith("/dashboard/"):
         dest = "https://desk.graciagroup.com/blockbook" + raw_path[len("/dashboard"):]
@@ -6302,8 +6353,48 @@ def lambda_handler(event, context):
                             "Cache-Control": "max-age=300",
                             "X-Robots-Tag": "noindex, nofollow"},
                 "body": COMMISSION_TIERS_HTML}
-    resp = _route(event, context)
+    # Admin "view as" persistence. An admin's explicit ?as=<id> is remembered in
+    # a signed gg_view_as cookie so every desk tab and in-page link (which carry
+    # no ?as=) keeps the viewed client until "back to admin" (resume_admin) or
+    # sign-out clears it. For anyone without admin privilege the param is
+    # dropped and the cookie is never read or set.
+    qs_in = event.get("queryStringParameters") or {}
+    own_admin = None
+    view_as = None
+    va_cookie = None
     try:
+        own_admin = _request_admin_id(event)
+        if qs_in.get("view") == "resume_admin" or qs_in.get("signout") == "1":
+            va_cookie = _cookie(VIEW_AS_COOKIE_NAME, "", 0)
+        elif own_admin:
+            explicit = (qs_in.get("as") or "").strip()
+            if explicit == own_admin:
+                va_cookie = _cookie(VIEW_AS_COOKIE_NAME, "", 0)
+            elif explicit:
+                view_as = explicit
+                if explicit.isdigit():
+                    va_cookie = _cookie(VIEW_AS_COOKIE_NAME, make_view_as_cookie(own_admin, explicit),
+                                        VIEW_AS_DAYS)
+            else:
+                view_as = read_view_as_cookie(get_cookie(event, VIEW_AS_COOKIE_NAME), own_admin)
+                if view_as:
+                    event = dict(event, queryStringParameters=dict(qs_in, **{"as": view_as}))
+        elif "as" in qs_in:
+            event = dict(event, queryStringParameters={k: v for k, v in qs_in.items() if k != "as"})
+    except Exception as e:
+        print(f"view-as handling skipped: {e}")
+        view_as = None
+    resp = _route(event, context)
+    if va_cookie:
+        resp["cookies"] = list(resp.get("cookies") or []) + [va_cookie]
+    try:
+        if own_admin and view_as and view_as != own_admin:
+            headers = resp.get("headers") or {}
+            body = resp.get("body") or ""
+            anchor = '<div class="card">'
+            if "text/html" in headers.get("Content-Type", "") and anchor in body:
+                resp["body"] = body.replace(anchor, anchor + _viewing_as_bar(view_as), 1)
+            return resp
         admin_id = read_admin_cookie(get_cookie(event, ADMIN_COOKIE_NAME))
         if not admin_id:
             return resp
