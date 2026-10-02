@@ -20,6 +20,10 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::271378210266:role/github-actions-deploy
           aws-region: us-east-1
+      # pypdf (pure Python) is bundled for the Engagement Docs CEF reader. The code
+      # imports it lazily, so a package without it still runs (CEF parsing just skips).
       - run: |
-          zip -j function.zip lambda_function.py
+          pip install --no-deps --target build pypdf==6.19.0
+          cp lambda_function.py build/
+          (cd build && zip -qr ../function.zip .)
           aws lambda update-function-code --function-name Portfolio --zip-file fileb://function.zip

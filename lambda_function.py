@@ -3450,12 +3450,14 @@ def render_admin_hub():
     """, eyebrow="Admin", is_admin=True, view="admin")
 
 
-# ── Engagement Docs (?view=engagement) — phase 1, READ-ONLY ──────────────────────
-# Admin-only form + live preview for the sell-side agent agreement / Schedule A.
-# Reads deals.json + companies.json from the CRM snapshot via the same _wl_json path
-# the auction prefill uses, cached on the warm instance. Makes NO writes of any kind:
-# no Pipeline API, no S3 put, no Drive, no email.
+# ── Engagement Docs (?view=engagement) — READ-ONLY ───────────────────────────────
+# Admin-only form + live preview for the sell-/buy-side agent agreement and Schedule A.
+# Reads the CRM snapshot (deals.json, companies.json, syndicate-dash/people-slim.json,
+# syndicate-dash/deals-closed.json) and, through its own JSON sub-route, Google Drive.
+# Makes NO writes of any kind: no Pipeline API, no S3 put, no Drive write, no email.
+# The only non-GET request anywhere in here is the OAuth refresh-token exchange.
 ENG_SELLER_LEGAL_FIELD  = "custom_label_3064355"   # Deal: Seller Legal Name
+ENG_BUYER_LEGAL_FIELD   = "custom_label_3064356"   # Deal: Buyer Legal Name
 ENG_STRUCTURE_FIELD     = "custom_label_3064360"   # Deal: Structure (single id or list)
 ENG_COMPANY_LEGAL_FIELD = "custom_label_3769275"   # Company: Legal Name
 ENG_MIN_SIZE_FIELD      = "custom_label_3065488"
@@ -3463,13 +3465,23 @@ ENG_MAX_SIZE_FIELD      = "custom_label_3064645"
 ENG_BUY_ORDER_OPTION_ID = 5077819                  # custom_label_1958 Buy Order
 ENG_STRUCTURE_LABELS    = {6250090: "Direct", 5077906: "SPV", 5077903: "Forward"}
 ENG_CLOSED_STAGES       = {"won", "lost", "obsolete", "trade broken"}
-ENG_PEOPLE_SLIM_BUCKET  = "syndicate-dash"
-ENG_PEOPLE_SLIM_KEY     = "people-slim.json"
+ENG_TRANSACTOR_FIELD    = "custom_label_3759163"   # Person: Transactor Type
+ENG_TT_INDIVIDUAL       = {6484810, 6716196, 6892622, 6484809}
+ENG_TT_LABELS = {6484810: "Natural Person", 6716196: "Employee Holder",
+                 6892622: "Employee Holder - VIP", 6484809: "Ex-Employee Holder",
+                 6484811: "Family Office", 6484815: "Corporation", 6484808: "VC or PE Fund",
+                 6484812: "Institution", 6859893: "Syndicator", 7037492: "Hedge Fund"}
+ENG_INVESTOR_LEVEL_FIELD = "custom_label_3923758"  # Person: Investor Level
+ENG_INVESTOR_LEVELS = {6950561: "Unknown", 7161646: "Hold: Screen for Substantive",
+                       6950562: "Non-Accredited", 7162165: "Substantive",
+                       6950563: "Accredited Investor", 7209227: "Qualified Client",
+                       6950564: "Qualified Purchaser"}
+ENG_PEOPLE_SLIM_KEY     = "syndicate-dash/people-slim.json"   # on COMPANIES_BUCKET
+ENG_DEALS_CLOSED_KEY    = "syndicate-dash/deals-closed.json"  # on COMPANIES_BUCKET
 ENG_CACHE_SECONDS       = 600
-ENG_MAX_PAYLOAD_BYTES   = 4_000_000                # Function URL responses cap at 6 MB
 
 _eng_cache = {"ts": 0.0, "data": None}
-_eng_people_slim_cache = None   # (list_of_[id, name, company], note); set on first use
+_eng_people_cache = None   # see _eng_people()
 
 
 def _eng_stage_name(deal):
@@ -3500,6 +3512,10 @@ def _eng_size(cf, deal):
     return f"${v:,.0f}"
 
 
+def _eng_str(v):
+    return v.strip() if isinstance(v, str) else ""
+
+
 def _eng_person_name(p):
     full = (p.get("full_name") or p.get("name") or "").strip()
     if not full:
@@ -3509,28 +3525,60 @@ def _eng_person_name(p):
 
 
 def _eng_person_company(p):
-    """(company_id_str, company_name) for an embedded Pipeline person record."""
+    """(company_id_str, company_name) for a Pipeline person record."""
     co = p.get("company") if isinstance(p.get("company"), dict) else {}
     cid = co.get("id") or p.get("company_id")
     name = (co.get("name") or p.get("company_name") or "").strip()
     return (str(cid) if cid else ""), name
 
 
-def _eng_people_slim():
-    """People for name search from s3://syndicate-dash/people-slim.json, cached on the
-    warm instance. Accepted only if records carry a name and a company field. Returns
-    (rows, note); rows is None when the file is unreadable or unusable."""
-    global _eng_people_slim_cache
-    if _eng_people_slim_cache is not None:
-        return _eng_people_slim_cache
+def _eng_person_phone(p):
+    for k in ("phone", "mobile", "work_phone", "mobile_phone", "home_phone"):
+        v = _eng_str(p.get(k))
+        if v:
+            return v
+    phones = p.get("phones")
+    for x in phones if isinstance(phones, list) else []:
+        v = _eng_str(x) if isinstance(x, str) else _eng_str((x or {}).get("number") or (x or {}).get("phone"))
+        if v:
+            return v
+    return ""
+
+
+def _eng_deal_person_ids(deal):
+    ids = []
+    for p in deal.get("people") if isinstance(deal.get("people"), list) else []:
+        if isinstance(p, dict) and p.get("id") is not None:
+            ids.append(str(p["id"]))
+    for pid in deal.get("person_ids") or []:
+        if pid is not None:
+            ids.append(str(pid))
+    pc = deal.get("primary_contact")
+    if isinstance(pc, dict) and pc.get("id") is not None:
+        ids.append(str(pc["id"]))
+    return list(dict.fromkeys(ids))
+
+
+def _eng_people():
+    """People from people-slim.json, parsed ONCE per warm instance and kept slim:
+       {"by_id": {pid: (pid, name, co, coId, title, phone, tt, il)}, "rows": [...],
+        "by_co_id": {coId: [pid]}, "by_co_name": {lower(co): [pid]}, "note": str}
+    tt is "individual" / "entity" / "" from Transactor Type; il is the Investor Level
+    label. rows is None when the file is unreadable or carries no name + company."""
+    global _eng_people_cache
+    if _eng_people_cache is not None:
+        return _eng_people_cache
+    out = {"by_id": {}, "rows": None, "by_co_id": {}, "by_co_name": {}, "note": ""}
     try:
-        obj = boto3.client("s3").get_object(Bucket=ENG_PEOPLE_SLIM_BUCKET, Key=ENG_PEOPLE_SLIM_KEY)
+        obj = boto3.client("s3").get_object(Bucket=COMPANIES_BUCKET, Key=ENG_PEOPLE_SLIM_KEY)
         data = json.loads(obj["Body"].read())
     except Exception as e:
         print(f"engagement: people-slim unavailable: {e}")
-        _eng_people_slim_cache = (None, f"people-slim.json not readable ({type(e).__name__})")
-        return _eng_people_slim_cache
+        out["note"] = f"people-slim.json not readable ({type(e).__name__})"
+        _eng_people_cache = out
+        return out
     recs = data.get("people", []) if isinstance(data, dict) else (data or [])
+    del data
     rows, with_co = [], 0
     for p in recs if isinstance(recs, list) else []:
         if not isinstance(p, dict) or p.get("id") is None:
@@ -3539,42 +3587,76 @@ def _eng_people_slim():
         if not name:
             continue
         cid, co = _eng_person_company(p)
+        cf = p.get("custom_fields") or {}
+        tt_ids = cf_id_list(cf.get(ENG_TRANSACTOR_FIELD))
+        tt = ("individual" if any(t in ENG_TT_INDIVIDUAL for t in tt_ids)
+              else "entity" if tt_ids else "")
+        il = next((ENG_INVESTOR_LEVELS[i] for i in cf_id_list(cf.get(ENG_INVESTOR_LEVEL_FIELD))
+                   if i in ENG_INVESTOR_LEVELS), "")
+        row = (str(p["id"]), name, co, cid, _eng_str(p.get("title")), _eng_person_phone(p), tt, il)
+        rows.append(row)
+        out["by_id"][row[0]] = row
         if co:
             with_co += 1
-        rows.append([str(p["id"]), name, co, cid])
-    if not rows or not with_co:
-        _eng_people_slim_cache = (None, "people-slim.json has no usable name + company fields")
+            out["by_co_name"].setdefault(co.lower(), []).append(row[0])
+        if cid:
+            out["by_co_id"].setdefault(cid, []).append(row[0])
+    del recs
+    if rows and with_co:
+        out["rows"] = rows
+        out["note"] = "people-slim.json"
     else:
-        _eng_people_slim_cache = (rows, "people-slim.json")
-    return _eng_people_slim_cache
+        out["note"] = "people-slim.json has no usable name + company fields"
+    _eng_people_cache = out
+    return out
 
 
 def _engagement_data():
-    """Slim payload for the form, cached for ENG_CACHE_SECONDS on the warm instance."""
+    """Everything the page and the sub-routes need, cached ENG_CACHE_SECONDS on the
+    warm instance. The page embeds only deals + companies; people are searched
+    server-side (api=people) so the page stays small however large the slim file is."""
     now = time.time()
     if _eng_cache["data"] is not None and now - _eng_cache["ts"] < ENG_CACHE_SECONDS:
         return _eng_cache["data"]
 
     raw_cos = (_wl_json(COMPANIES_BUCKET, COMPANIES_KEY, {}) or {}).get("companies") or []
-    co_by_id = {}
-    companies = []
+    co_by_id, companies = {}, []
     for c in raw_cos:
         if not isinstance(c, dict) or c.get("id") is None:
             continue
         name = (c.get("name") or "").strip()
-        legal = ((c.get("custom_fields") or {}).get(ENG_COMPANY_LEGAL_FIELD) or "")
-        legal = legal.strip() if isinstance(legal, str) else ""
+        legal = _eng_str((c.get("custom_fields") or {}).get(ENG_COMPANY_LEGAL_FIELD))
         co_by_id[str(c["id"])] = (name, legal)
         if name and not name.endswith("$"):
             companies.append([str(c["id"]), name, legal])
     companies.sort(key=lambda r: r[1].lower())
+    del raw_cos
 
+    ppl = _eng_people()
     try:
         idx = _people_index().get("by_id", {}) or {}
     except Exception:
         idx = {}
 
     raw_deals = (_wl_json(COMPANIES_BUCKET, DEALS_KEY, {}) or {}).get("deals") or []
+    closed = _wl_json(COMPANIES_BUCKET, ENG_DEALS_CLOSED_KEY, None)
+    closed_ok = closed is not None
+    closed = (closed.get("deals") if isinstance(closed, dict) else closed) or []
+
+    # Seller / Buyer Legal Name per linked person, across live AND closed deals.
+    legal_by_pid = {}
+    for d in list(raw_deals) + list(closed):
+        if not isinstance(d, dict):
+            continue
+        cf = d.get("custom_fields") or {}
+        names = [(n, lab) for n, lab in ((_eng_str(cf.get(ENG_SELLER_LEGAL_FIELD)), "Seller Legal Name"),
+                                         (_eng_str(cf.get(ENG_BUYER_LEGAL_FIELD)), "Buyer Legal Name")) if n]
+        if not names:
+            continue
+        for pid in _eng_deal_person_ids(d):
+            for n, lab in names:
+                legal_by_pid.setdefault(pid, []).append((n, f"{lab} · deal #{d.get('id')}"))
+
     deals, deal_people = [], {}
     for d in raw_deals:
         if not isinstance(d, dict) or d.get("id") is None:
@@ -3588,83 +3670,430 @@ def _engagement_data():
         side_ids = _deal_cf_option_ids(d, SELL_ORDER_FIELD)
         side = ("Sell" if SELL_ORDER_OPTION_ID in side_ids
                 else "Buy" if ENG_BUY_ORDER_OPTION_ID in side_ids else "")
-        seller_legal = cf.get(ENG_SELLER_LEGAL_FIELD) or ""
-        seller_legal = seller_legal.strip() if isinstance(seller_legal, str) else ""
         structs = []
         for oid in cf_id_list(cf.get(ENG_STRUCTURE_FIELD)):
             lab = ENG_STRUCTURE_LABELS.get(oid)
             if lab and lab not in structs:
                 structs.append(lab)
-        people, seen = [], set()
-        embedded = d.get("people") if isinstance(d.get("people"), list) else []
-        for p in embedded:
-            if not isinstance(p, dict) or p.get("id") is None or str(p["id"]) in seen:
+        embedded = {str(p["id"]): p for p in (d.get("people") if isinstance(d.get("people"), list) else [])
+                    if isinstance(p, dict) and p.get("id") is not None}
+        people = []
+        for pid in _eng_deal_person_ids(d):
+            row = ppl["by_id"].get(pid)
+            if row:
+                people.append([row[0], row[1], row[2], row[3]])
                 continue
-            pid = str(p["id"])
-            seen.add(pid)
-            name = _eng_person_name(p) or (idx.get(pid) or {}).get("name", "")
-            if not name:
-                continue
-            pcid, pco = _eng_person_company(p)
-            people.append([pid, name, pco, pcid])
-        for pid in _deal_linked_person_ids(d):
-            pid = str(pid)
-            if pid in seen:
-                continue
-            seen.add(pid)
-            name = ((idx.get(pid) or {}).get("name") or "").strip()
+            p = embedded.get(pid) or {}
+            name = _eng_person_name(p) or ((idx.get(pid) or {}).get("name") or "").strip()
             if name:
-                people.append([pid, name, "", ""])
+                pcid, pco = _eng_person_company(p)
+                people.append([pid, name, pco, pcid])
         for row in people:
             deal_people.setdefault(row[0], row)
         deals.append({"id": str(d["id"]), "co": co_name, "coId": co_id,
                       "il": co_by_id.get(co_id, ("", ""))[1], "side": side,
-                      "size": _eng_size(cf, d), "sl": seller_legal, "st": structs,
+                      "size": _eng_size(cf, d), "sl": _eng_str(cf.get(ENG_SELLER_LEGAL_FIELD)),
+                      "bl": _eng_str(cf.get(ENG_BUYER_LEGAL_FIELD)), "st": structs,
                       "stage": _eng_stage_name(d), "pp": people})
     deals.sort(key=lambda r: (0 if r["side"] == "Sell" else 1, r["co"].lower()))
 
-    slim_rows, slim_note = _eng_people_slim()
-    if slim_rows:
-        people, source = slim_rows, "people-slim.json"
+    if ppl["rows"]:
+        source, fallback = "people-slim.json", None
     else:
-        people = sorted(deal_people.values(), key=lambda r: r[1].lower())
-        source = f"people linked to deals in deals.json ({slim_note})"
-
-    data = {"deals": deals, "companies": companies, "people": people,
-            "source": source,
+        fallback = sorted(deal_people.values(), key=lambda r: r[1].lower())
+        source = f"people linked to deals in deals.json ({ppl['note']})"
+    data = {"page": {"deals": deals, "companies": companies},
+            "legal_by_pid": legal_by_pid, "fallback_people": fallback, "source": source,
             "counts": {"deals_total": len(raw_deals), "deals_live": len(deals),
-                       "companies": len(companies), "people": len(people)}}
-    if slim_rows and len(json.dumps(data, separators=(",", ":"))) > ENG_MAX_PAYLOAD_BYTES:
-        people = sorted(deal_people.values(), key=lambda r: r[1].lower())
-        data["people"] = people
-        data["counts"]["people"] = len(people)
-        data["source"] = "people linked to deals in deals.json (people-slim.json too large to embed)"
+                       "deals_closed": len(closed), "closed_ok": closed_ok,
+                       "companies": len(companies),
+                       "people": len(ppl["rows"]) if ppl["rows"] else len(fallback)}}
     _eng_cache.update(ts=now, data=data)
     return data
 
 
-ENG_STANDARD_FEES = [
-    "5% multiplied by the Transaction Value for transactions at or under $1,000,000; or",
-    "4.0% multiplied by the Transaction Value for transactions between $1,000,001 and $5,000,000; or",
-    "3.5% multiplied by the Transaction Value for transactions between $5,000,001 and $10,000,000; or",
-    "2.5% multiplied by the Transaction Value for transactions above $10,000,001.",
+def _eng_json(obj, status=200):
+    return {"statusCode": status, "headers": {"Content-Type": "application/json",
+                                              "Cache-Control": "no-store"},
+            "body": json.dumps(obj, separators=(",", ":"))}
+
+
+def _eng_api_people(q):
+    """Type-ahead over people by name (and company), max 30 rows."""
+    toks = [t for t in (q or "").lower().split() if t]
+    if not toks:
+        return _eng_json({"people": []})
+    ppl = _eng_people()
+    if ppl["rows"]:
+        rows = ppl["rows"]
+    else:
+        rows = [(r[0], r[1], r[2], r[3], "", "", "", "") for r in (_engagement_data()["fallback_people"] or [])]
+    out = []
+    for r in rows:
+        hay = (r[1] + " " + r[2]).lower()
+        if all(t in hay for t in toks):
+            out.append([r[0], r[1], r[2], r[3]])
+            if len(out) >= 30:
+                break
+    return _eng_json({"people": out})
+
+
+def _eng_api_party(pid, co_id, co_name):
+    """Pipeline-only party facts: the person, everyone at their company, and every
+    Seller/Buyer Legal Name on live or closed deals linked to any of them."""
+    data = _engagement_data()
+    ppl = _eng_people()
+    person = ppl["by_id"].get(str(pid)) if pid else None
+    if person:
+        co_id = co_id or person[3]
+        co_name = co_name or person[2]
+    team_ids = []
+    if co_id and ppl["by_co_id"].get(str(co_id)):
+        team_ids = ppl["by_co_id"][str(co_id)]
+    elif co_name:
+        team_ids = ppl["by_co_name"].get(co_name.strip().lower(), [])
+    team = [[r[0], r[1], r[4]] for r in (ppl["by_id"].get(t) for t in team_ids[:300]) if r]
+    legal, seen = [], set()
+    for who in ([str(pid)] if pid else []) + list(team_ids):
+        for n, src in data["legal_by_pid"].get(who, []):
+            if n.lower() not in seen:
+                seen.add(n.lower())
+                legal.append([n, src])
+    return _eng_json({
+        "person": ({"id": person[0], "name": person[1], "co": person[2], "coId": person[3],
+                    "title": person[4], "phone": person[5], "tt": person[6], "il": person[7]}
+                   if person else None),
+        "team": team, "legal": legal})
+
+
+# ── Google Drive (read-only) — mirrors pipeline-agent's token refresh + folder match ──
+ENG_DRIVE_CLIENTS_FOLDER_ID = "15tJGEiOe4eKszNHDLrm5wG_8C6Icn5wo"
+ENG_DRIVE_CREDS_BUCKET      = "pipeline-token"
+ENG_DRIVE_CREDS_KEY         = "google-drive-oauth.json"
+ENG_DRIVE_FILES_URL         = "https://www.googleapis.com/drive/v3/files"
+ENG_DRIVE_ALL = {"supportsAllDrives": "true", "includeItemsFromAllDrives": "true",
+                 "corpora": "allDrives"}
+ENG_CEF_MAX_BYTES = 8 * 1024 * 1024
+
+_eng_drive_creds = None
+_eng_drive_token = {"access_token": None, "expires_at": 0}
+_eng_drive_cache = {}                     # key -> (ts, result)
+_eng_drive_folders = {"ts": 0.0, "folders": None}
+
+
+class _EngDriveError(Exception):
+    pass
+
+
+def _eng_drive_access_token():
+    global _eng_drive_creds
+    if _eng_drive_token["access_token"] and time.time() < _eng_drive_token["expires_at"]:
+        return _eng_drive_token["access_token"]
+    if _eng_drive_creds is None:
+        try:
+            obj = boto3.client("s3").get_object(Bucket=ENG_DRIVE_CREDS_BUCKET, Key=ENG_DRIVE_CREDS_KEY)
+            _eng_drive_creds = json.loads(obj["Body"].read())
+        except Exception as e:
+            code = e.response.get("Error", {}).get("Code", "") if isinstance(e, ClientError) else ""
+            raise _EngDriveError(f"can't read {ENG_DRIVE_CREDS_BUCKET}/{ENG_DRIVE_CREDS_KEY}"
+                                 f" ({code or type(e).__name__})")
+    body = urllib.parse.urlencode({
+        "client_id": _eng_drive_creds.get("client_id", ""),
+        "client_secret": _eng_drive_creds.get("client_secret", ""),
+        "refresh_token": _eng_drive_creds.get("refresh_token", ""),
+        "grant_type": "refresh_token",
+    }).encode()
+    req = urllib.request.Request("https://oauth2.googleapis.com/token", data=body,
+                                 headers={"Content-Type": "application/x-www-form-urlencoded"},
+                                 method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            tok = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        raise _EngDriveError(f"Google token refresh failed (HTTP {e.code})")
+    except Exception as e:
+        raise _EngDriveError(f"Google token refresh failed ({type(e).__name__})")
+    _eng_drive_token["access_token"] = tok["access_token"]
+    _eng_drive_token["expires_at"] = time.time() + int(tok.get("expires_in", 3600)) - 60
+    return _eng_drive_token["access_token"]
+
+
+def _eng_drive_get(url, params, raw=False, _retried=False):
+    """Drive GET (the only Drive method this page ever uses). JSON dict, or bytes
+    when raw. Raises _EngDriveError with a short reason."""
+    token = _eng_drive_access_token()
+    req = urllib.request.Request(f"{url}?{urllib.parse.urlencode(params)}",
+                                 headers={"Authorization": f"Bearer {token}"}, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            body = resp.read(ENG_CEF_MAX_BYTES + 1) if raw else resp.read()
+            return body if raw else json.loads(body.decode() or "{}")
+    except urllib.error.HTTPError as e:
+        if e.code == 401 and not _retried:
+            _eng_drive_token.update(access_token=None, expires_at=0)
+            return _eng_drive_get(url, params, raw, _retried=True)
+        raise _EngDriveError(f"Drive returned HTTP {e.code}")
+    except _EngDriveError:
+        raise
+    except Exception as e:
+        raise _EngDriveError(f"Drive request failed ({type(e).__name__})")
+
+
+def _eng_drive_list(q, fields):
+    files, page_token = [], None
+    while True:
+        params = dict(ENG_DRIVE_ALL, q=q, fields=f"nextPageToken,files({fields})", pageSize=1000)
+        if page_token:
+            params["pageToken"] = page_token
+        r = _eng_drive_get(ENG_DRIVE_FILES_URL, params)
+        files.extend(r.get("files", []))
+        page_token = r.get("nextPageToken")
+        if not page_token:
+            return files
+
+
+def _eng_client_folders():
+    now = time.time()
+    if _eng_drive_folders["folders"] is None or now - _eng_drive_folders["ts"] > ENG_CACHE_SECONDS:
+        _eng_drive_folders["folders"] = _eng_drive_list(
+            f"'{ENG_DRIVE_CLIENTS_FOLDER_ID}' in parents and "
+            "mimeType='application/vnd.google-apps.folder' and trashed=false", "id,name")
+        _eng_drive_folders["ts"] = now
+    return _eng_drive_folders["folders"]
+
+
+_ENG_ENTITY_SUFFIXES = {"llc", "inc", "incorporated", "ltd", "limited", "lp", "llp",
+                        "corp", "corporation", "co", "gmbh", "sa", "ag", "plc"}
+
+
+def _eng_folder_tokens(name, drop_suffixes=True):
+    s = (name or "").lower()
+    s = re.sub(r"[-‐‑‒–—/]", " ", s)   # dashes/slashes separate words
+    s = re.sub(r"[^\w\s]", "", s)      # other punctuation dropped: "l.l.c." -> "llc"
+    tokens = s.split()
+    while drop_suffixes and len(tokens) > 1 and tokens[-1] in _ENG_ENTITY_SUFFIXES:
+        tokens.pop()
+    return tokens
+
+
+def _eng_match_client_folders(client_name, client_type, folders):
+    """pipeline-agent's tiered matching, read-only. Returns (matches, near_matches)."""
+    target = _eng_folder_tokens(client_name)
+    if not target:
+        return [], []
+    normed = [(f, _eng_folder_tokens(f.get("name"))) for f in folders]
+    tier1 = [f for f, t in normed if t == target]
+    if tier1:
+        return tier1, []
+    if client_type == "person":
+        tier2 = [f for f, t in normed if set(t) == set(target)]
+        if tier2:
+            return tier2, []
+    prefixes = [target]
+    if client_type == "person" and "," not in client_name and len(target) > 1:
+        prefixes.append([target[-1]] + target[:-1])
+    tier3 = []
+    for f in folders:
+        t = _eng_folder_tokens(f.get("name"), drop_suffixes=False)
+        if any(t[:len(pre)] == pre for pre in prefixes):
+            tier3.append(f)
+    if tier3:
+        return tier3, []
+    near = []
+    for f, t in normed:
+        if not t:
+            continue
+        shared = set(t) & set(target)
+        if target[:len(t)] == t or (len(shared) >= 2 and len(shared) / len(set(t) | set(target)) >= 0.6):
+            near.append(f)
+    return [], near
+
+
+_ENG_CEF_LABELS = [
+    ("entity_name", r"Name\s+of\s+Entity\s+Client"),
+    ("entity_addr", r"Principal\s+Place\s+of\s+Business\s+of\s+Entity\s+Client"),
+    ("person_name", r"Name\s+of\s+Natural\s+Person\s+Client"),
+    ("person_addr", r"Address\s+of\s+Client"),
+    ("phone", r"(?:Client\s+)?(?:Phone|Telephone)(?:\s+Number)?"),
+    ("_", r"Client\s+Email|Email(?:\s+Address)?|OPTIONAL:|Entity\s+Client\s+US\s+Tax\s+ID"
+          r"|Client'?s\s+Total\s+Assets|Entity\s+Control\s+Person|Name\s+of\s+Entity\s+Control"
+          r"|Control\s+Person|Date\s+of\s+Birth|Is\s+the\s+Client|Tax\s+ID|Identity\s+Verification"
+          r"|Natural\s+Person\s+Client\s+Profile|Address\s+of\s+Employer|Attestation"
+          r"|Please\s+confirm|Submission\s+Date|Who\s+is\s+the|Page\s+\d+|Upload"),
 ]
+_ENG_CEF_NOISE = re.compile(r"^(?:PDF|IMG|JPG|JPEG|PNG|\d{1,2})$|\.(?:pdf|jpe?g|png|heic)$", re.I)
+
+
+def _eng_parse_cef(text):
+    """Pull the client's name, address and phone out of a Jotform CEF's text.
+    Returns {"kind": "entity"|"individual"|"", "name", "address": [l1, l2], "phone"}."""
+    hits = []
+    for key, pat in _ENG_CEF_LABELS:
+        for m in re.finditer(pat, text):
+            hits.append((m.start(), m.end(), key))
+    hits.sort()
+    # Drop labels that sit inside a longer label already matched.
+    clean, last_end = [], -1
+    for h in hits:
+        if h[0] >= last_end:
+            clean.append(h)
+            last_end = h[1]
+    vals = {}
+    for i, (s, e, key) in enumerate(clean):
+        if key == "_" or key in vals:
+            continue
+        nxt = clean[i + 1][0] if i + 1 < len(clean) else len(text)
+        lines = [ln.strip() for ln in text[e:nxt].splitlines()]
+        vals[key] = [ln for ln in lines if ln and not _ENG_CEF_NOISE.search(ln)]
+
+    def addr(lines):
+        lines = lines[:4]
+        return [lines[0], ", ".join(lines[1:])] if lines else ["", ""]
+
+    phone = " ".join(vals.get("phone", [])[:1])
+    if not re.search(r"\d{3}", phone):
+        phone = ""
+    if vals.get("entity_name"):
+        return {"kind": "entity", "name": vals["entity_name"][0],
+                "address": addr(vals.get("entity_addr", [])), "phone": phone}
+    if vals.get("person_name"):
+        return {"kind": "individual", "name": vals["person_name"][0],
+                "address": addr(vals.get("person_addr", [])), "phone": phone}
+    return {"kind": "", "name": "", "address": ["", ""], "phone": phone}
+
+
+def _eng_cef_text(pdf_bytes):
+    """Text of a CEF PDF via pypdf (bundled by deploy.yml). None if pypdf is absent."""
+    try:
+        import io as _io
+        import pypdf
+    except ImportError:
+        return None
+    reader = pypdf.PdfReader(_io.BytesIO(pdf_bytes))
+    return "\n".join((pg.extract_text() or "") for pg in reader.pages)
+
+
+_ENG_AGREEMENT_NAME = re.compile(r"Agent\s+Agreement\s*-\s*(.+?)\s+-\s+", re.I)
+
+
+def _eng_drive_lookup(person_name, company_name):
+    """Read-only Drive facts for a party: matched client folders, entity names from
+    agreement file names, signed sell/buy agreements, and the newest CEF parsed."""
+    folders = _eng_client_folders()
+    picked = []
+    for nm, typ in ((person_name, "person"), (company_name, "entity")):
+        if nm:
+            matches, _near = _eng_match_client_folders(nm, typ, folders)
+            for f in matches:
+                if f["id"] not in {p["id"] for p in picked}:
+                    picked.append({"id": f["id"], "name": f.get("name", ""), "for": typ})
+    files = []
+    for f in picked:
+        for x in _eng_drive_list(f"'{f['id']}' in parents and trashed=false and "
+                                 "mimeType!='application/vnd.google-apps.folder'",
+                                 "id,name,mimeType,modifiedTime"):
+            x["_folder"] = f["name"]
+            files.append(x)
+    names, signed = [], {"sell": [], "buy": []}
+    for x in files:
+        n = x.get("name") or ""
+        m = _ENG_AGREEMENT_NAME.search(n)
+        if m and m.group(1).strip() not in names:
+            names.append(m.group(1).strip())
+        low = n.lower()
+        if "agent agreement" in low and "signed" in low:
+            if "sell" in low:
+                signed["sell"].append(n)
+            if "buy" in low:
+                signed["buy"].append(n)
+    cefs = sorted([x for x in files if "client engagement form" in (x.get("name") or "").lower()
+                   and (x.get("mimeType") == "application/pdf" or (x.get("name") or "").lower().endswith(".pdf"))],
+                  key=lambda x: x.get("modifiedTime") or "", reverse=True)
+    cef, cef_note = None, ""
+    if cefs:
+        blob = _eng_drive_get(f"{ENG_DRIVE_FILES_URL}/{cefs[0]['id']}",
+                              {"alt": "media", "supportsAllDrives": "true"}, raw=True)
+        if len(blob) > ENG_CEF_MAX_BYTES:
+            cef_note = "CEF too large to read"
+        else:
+            try:
+                text = _eng_cef_text(blob)
+            except Exception as e:
+                text, cef_note = "", f"CEF unreadable ({type(e).__name__})"
+            if text is None:
+                cef_note = "CEF parsing unavailable (pypdf not installed)"
+            elif text:
+                cef = _eng_parse_cef(text)
+                cef["file"] = cefs[0].get("name", "")
+    return {"ok": True,
+            "folders": [{"name": f["name"], "for": f["for"],
+                         "url": f"https://drive.google.com/drive/folders/{f['id']}"} for f in picked],
+            "entity_names": names, "signed": signed, "cef": cef, "cef_note": cef_note,
+            "files": len(files)}
+
+
+def _eng_api_drive(person_name, company_name):
+    key = ((person_name or "").strip().lower(), (company_name or "").strip().lower())
+    hit = _eng_drive_cache.get(key)
+    if hit and time.time() - hit[0] < ENG_CACHE_SECONDS:
+        return _eng_json(hit[1])
+    try:
+        result = _eng_drive_lookup(person_name, company_name)
+    except _EngDriveError as e:
+        result = {"ok": False, "error": str(e)}
+    except Exception as e:
+        print(f"engagement: drive lookup failed: {e}")
+        result = {"ok": False, "error": f"unexpected error ({type(e).__name__})"}
+    _eng_drive_cache[key] = (time.time(), result)
+    return _eng_json(result)
+
+
+def _engagement_route(qs):
+    """?view=engagement and its JSON sub-routes. Caller has already enforced the
+    admin gate; every branch here is a read."""
+    api = qs.get("api") or ""
+    if api == "people":
+        return _eng_api_people(qs.get("q") or "")
+    if api == "party":
+        return _eng_api_party(qs.get("pid") or "", qs.get("co_id") or "", qs.get("co_name") or "")
+    if api == "drive":
+        return _eng_api_drive(qs.get("person") or "", qs.get("company") or "")
+    return render_engagement()
+
+
+ENG_FEE_TEMPLATES = [
+    "{p}% multiplied by the Transaction Value for transactions at or under $1,000,000; or",
+    "{p}% multiplied by the Transaction Value for transactions between $1,000,001 and $5,000,000; or",
+    "{p}% multiplied by the Transaction Value for transactions between $5,000,001 and $10,000,000; or",
+    "{p}% multiplied by the Transaction Value for transactions above $10,000,001.",
+]
+ENG_FEES_STANDARD = ["5", "4.0", "3.5", "2.5"]
+ENG_FEES_GENEROUS = ["4", "3.5", "3", "2"]
 
 # Plain JS, deliberately NOT inside an f-string: braces are literal here.
 ENG_JS = r"""
 (function () {
   var D = JSON.parse(document.getElementById('eng-data').textContent);
-  var STD_FEES = JSON.parse(document.getElementById('eng-fees').textContent);
+  var C = JSON.parse(document.getElementById('eng-const').textContent);
   var OWN = '__own';
   var $ = function (id) { return document.getElementById(id); };
-  var st = { deal: null, person: null, issuer: null };
-  var peopleById = {};
-  D.people.forEach(function (p) { peopleById[p[0]] = p; });
+  var st = { deal: null, person: null, issuer: null, party: null, drive: null,
+             typeTouched: false, ptypeTouched: false, dirty: {} };
+  var seq = { party: 0, drive: 0, people: 0 };
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
+  }
+  function api(params, cb) {
+    var qs = Object.keys(params).map(function (k) {
+      return encodeURIComponent(k) + '=' + encodeURIComponent(params[k] || '');
+    }).join('&');
+    fetch('?view=engagement&' + qs, { credentials: 'same-origin' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (j) { cb(null, j); })
+      .catch(function (e) { cb(e.message || String(e)); });
   }
 
   // ── Date: today in America/New_York, "October 2nd, 2026" ──
@@ -3681,9 +4110,9 @@ ENG_JS = r"""
     return parts.month + ' ' + ordinal(parseInt(parts.day, 10)) + ', ' + parts.year;
   }
 
-  // ── Type-ahead ──
+  // ── Type-ahead (source may call back again later with async results) ──
   function typeahead(input, list, source, onPick) {
-    var items = [], active = -1;
+    var items = [], active = -1, gen = 0;
     function render() {
       list.innerHTML = items.map(function (it, i) {
         return '<div class="ta-item' + (i === active ? ' active' : '') + '" data-i="' + i + '">' +
@@ -3692,19 +4121,23 @@ ENG_JS = r"""
       list.style.display = items.length ? 'block' : 'none';
     }
     function search() {
-      var q = input.value.trim().toLowerCase();
-      items = q ? source(q.split(/\s+/)).slice(0, 40) : [];
-      active = items.length ? 0 : -1;
-      render();
+      var q = input.value.trim().toLowerCase(), my = ++gen;
+      if (!q) { items = []; render(); return; }
+      source(q.split(/\s+/), q, function (res) {
+        if (my !== gen) return;
+        items = res.slice(0, 50);
+        active = items.length ? Math.max(0, Math.min(active, items.length - 1)) : -1;
+        render();
+      });
     }
     function pick(i) {
       var it = items[i];
       if (!it) return;
       input.value = it.label;
-      items = []; render();
+      gen++; items = []; render();
       onPick(it);
     }
-    input.addEventListener('input', search);
+    input.addEventListener('input', function () { active = 0; search(); });
     input.addEventListener('focus', function () { if (input.value) search(); });
     input.addEventListener('keydown', function (e) {
       if (!items.length) return;
@@ -3733,37 +4166,45 @@ ENG_JS = r"""
     }
     return [d.co || '(no company)', d.side || '?', who, d.size || 'size n/a'].join(' · ');
   }
-  var startIndex = [];
-  D.deals.forEach(function (d) {
+  var dealIndex = D.deals.map(function (d) {
     var label = dealLabel(d);
-    startIndex.push({ kind: 'deal', tag: 'Deal', label: label, ref: d,
-      hay: (label + ' ' + d.pp.map(function (p) { return p[1] + ' ' + p[2]; }).join(' ')).toLowerCase() });
-  });
-  D.people.forEach(function (p) {
-    var label = p[1] + (p[2] ? ' · ' + p[2] : '');
-    startIndex.push({ kind: 'person', tag: 'Person', label: label, ref: p, hay: label.toLowerCase() });
+    return { kind: 'deal', tag: 'Deal', label: label, ref: d,
+      hay: (label + ' ' + d.pp.map(function (p) { return p[1] + ' ' + p[2]; }).join(' ')).toLowerCase() };
   });
   var companyIndex = D.companies.map(function (c) {
     return { label: c[1], ref: { id: c[0], name: c[1], legal: c[2] }, hay: c[1].toLowerCase() };
   });
+  var peopleTimer = null;
 
-  // ── Select helpers with a "Type your own…" escape hatch ──
+  // ── Select helpers ──
+  // opts: [{v, label, group, src}] ; groups become <optgroup>s in first-seen order.
   function fillSelect(sel, opts, pre, withOwn) {
-    var seen = {}, html = '';
+    var seen = {}, html = '', groups = [], byGroup = {}, srcs = {};
     opts.forEach(function (o) {
-      if (!o.v || seen[o.v]) return;
-      seen[o.v] = 1;
-      html += '<option value="' + esc(o.v) + '">' + esc(o.label || o.v) + '</option>';
+      var key = (o.v || '').toLowerCase();
+      if (!o.v || seen[key]) return;
+      seen[key] = o.v;
+      srcs[o.v] = o.src || '';
+      var g = o.group || '';
+      if (!byGroup[g]) { byGroup[g] = []; groups.push(g); }
+      byGroup[g].push('<option value="' + esc(o.v) + '">' + esc(o.label || o.v) + '</option>');
+    });
+    groups.forEach(function (g) {
+      html += g ? '<optgroup label="' + esc(g) + '">' + byGroup[g].join('') + '</optgroup>' : byGroup[g].join('');
     });
     if (withOwn !== false) html += '<option value="' + OWN + '">Type your own…</option>';
     sel.innerHTML = html;
-    if (pre && seen[pre]) sel.value = pre;
+    sel._srcs = srcs;
+    var hit = pre && seen[pre.toLowerCase()];
+    if (hit) sel.value = hit;
     else if (!Object.keys(seen).length && withOwn !== false) sel.value = OWN;
     syncOwn(sel);
   }
   function syncOwn(sel) {
     var own = $(sel.id + '-own');
     if (own) own.style.display = sel.value === OWN ? 'block' : 'none';
+    var note = $(sel.id + '-src');
+    if (note) note.textContent = (sel._srcs && sel._srcs[sel.value]) ? 'Source: ' + sel._srcs[sel.value] : '';
   }
   function val(id) {
     var sel = $(id);
@@ -3771,49 +4212,142 @@ ENG_JS = r"""
     return sel.value;
   }
 
-  // ── Derived fields ──
+  // ── Type (side + full / schedule) ──
+  function typeVal() { return document.querySelector('input[name="f-type"]:checked').value; }
+  function side() { return typeVal().indexOf('buy') === 0 ? 'buy' : 'sell'; }
+  function isFull() { return /_full$/.test(typeVal()); }
+  function setType(v) { var r = document.querySelector('input[name="f-type"][value="' + v + '"]'); if (r) r.checked = true; }
+
+  // ── Party ──
+  function partyPool() { return st.deal ? st.deal.pp : (st.person ? [st.person] : []); }
   function partyInfo() {
-    var v = $('f-party').value || '', person = null, company = '';
+    var v = $('f-party').value || '', person = null, coId = '', coName = '';
     if (v.indexOf('p:') === 0) {
       var pid = v.slice(2);
-      var pool = st.deal ? st.deal.pp : (st.person ? [st.person] : []);
-      pool.forEach(function (p) { if (p[0] === pid) person = p; });
-      if (person) company = person[2];
+      partyPool().forEach(function (p) { if (p[0] === pid) person = p; });
+      if (person) { coName = person[2]; coId = person[3]; }
     } else if (v.indexOf('c:') === 0) {
-      company = v.slice(2);
+      var bar = v.indexOf('|');
+      coId = v.slice(2, bar); coName = v.slice(bar + 1);
     }
-    return { person: person, company: company };
+    return { person: person, coId: coId, coName: coName };
   }
-  function refreshParty() {
+  function refreshPartyOptions() {
     var opts = [];
-    if (st.deal) {
-      st.deal.pp.forEach(function (p) { opts.push({ v: 'p:' + p[0], label: p[1] + (p[2] ? ' (' + p[2] + ')' : '') }); });
-      st.deal.pp.forEach(function (p) { if (p[2]) opts.push({ v: 'c:' + p[2], label: p[2] + ' (company)' }); });
-    } else if (st.person) {
-      var p = st.person;
-      opts.push({ v: 'p:' + p[0], label: p[1] });
-      if (p[2]) opts.push({ v: 'c:' + p[2], label: p[2] + ' (company)' });
-    }
+    partyPool().forEach(function (p) { opts.push({ v: 'p:' + p[0], label: p[1] + (p[2] ? ' (' + p[2] + ')' : '') }); });
+    partyPool().forEach(function (p) { if (p[2]) opts.push({ v: 'c:' + (p[3] || '') + '|' + p[2], label: p[2] + ' (company)' }); });
     fillSelect($('f-party'), opts, opts.length ? opts[0].v : '', false);
     $('f-party').disabled = !opts.length;
   }
-  function refreshSellerAndSigner() {
+  function onPartyChange() {
     var pi = partyInfo();
-    var sl = st.deal ? st.deal.sl : '';
-    var cands = [];
-    if (sl) cands.push({ v: sl, label: sl + '  — Seller Legal Name' });
-    if (pi.company) cands.push({ v: pi.company });
-    if (pi.person) cands.push({ v: pi.person[1] });
-    fillSelect($('f-seller'), cands, sl || (cands[0] && cands[0].v));
-    var signers = [];
-    (st.deal ? st.deal.pp : (st.person ? [st.person] : [])).forEach(function (p) {
-      signers.push({ v: p[1] });
+    st.party = { info: pi, facts: null };
+    st.drive = null;
+    st.ptypeTouched = false;
+    st.dirty = {};
+    $('f-title').value = 'Authorized Signatory';
+    $('f-addr1').value = ''; $('f-addr2').value = ''; $('f-phone').value = '';
+    $('drive-note').textContent = '';
+    applyPartyType();
+    refreshEntityNames(); refreshSigner(); refreshInvestorLevel();
+    preview();
+    if (!pi.person && !pi.coName) return;
+    var my = ++seq.party;
+    api({ api: 'party', pid: pi.person ? pi.person[0] : '', co_id: pi.coId, co_name: pi.coName }, function (err, j) {
+      if (my !== seq.party) return;
+      st.party.facts = err ? null : j;
+      if (err) $('drive-note').textContent = 'Pipeline lookup failed: ' + err;
+      applyPartyType();
+      fillContact();
+      refreshEntityNames(); refreshSigner(); refreshInvestorLevel();
+      preview();
     });
-    fillSelect($('f-signer'), signers, pi.person ? pi.person[1] : (signers[0] && signers[0].v));
+    var myd = ++seq.drive;
+    $('drive-note').textContent = 'Looking up Drive…';
+    api({ api: 'drive', person: pi.person ? pi.person[1] : '', company: pi.coName }, function (err, j) {
+      if (myd !== seq.drive) return;
+      if (err || !j || !j.ok) {
+        st.drive = null;
+        $('drive-note').textContent = 'Drive lookup unavailable: ' + (err || (j && j.error) || 'unknown error');
+      } else {
+        st.drive = j;
+        var bits = [];
+        bits.push(j.folders.length ? 'Drive: ' + j.folders.map(function (f) { return f.name; }).join(', ') : 'Drive: no client folder found');
+        if (j.cef) bits.push('CEF: ' + j.cef.file);
+        if (j.cef_note) bits.push(j.cef_note);
+        if (j.signed.sell.length) bits.push('signed sell-side agreement on file');
+        if (j.signed.buy.length) bits.push('signed buy-side agreement on file');
+        $('drive-note').textContent = bits.join(' · ');
+        if (!st.typeTouched && j.signed[side()].length) setType(side() + '_sched');
+      }
+      applyPartyType();
+      fillContact();
+      refreshEntityNames();
+      preview();
+    });
+  }
+  function partyPerson() {
+    var f = st.party && st.party.facts;
+    return (f && f.person) || null;
+  }
+  function applyPartyType() {
+    if (st.ptypeTouched) return syncPartyTypeUI();
+    var pi = st.party ? st.party.info : {}, pp = partyPerson(), t;
+    if (!pi.person && pi.coName) t = 'entity';
+    else if (pp && pp.tt) t = pp.tt;
+    else t = (pi.person && !pi.person[2]) ? 'individual' : (pi.person ? 'entity' : 'individual');
+    document.querySelector('input[name="f-ptype"][value="' + t + '"]').checked = true;
+    syncPartyTypeUI();
+  }
+  function ptype() { return document.querySelector('input[name="f-ptype"]:checked').value; }
+  function syncPartyTypeUI() {
+    var ent = ptype() === 'entity';
+    $('row-entity').style.display = ent ? '' : 'none';
+    $('row-title').style.display = ent ? '' : 'none';
+    var pp = partyPerson();
+    $('ptype-note').textContent = pp && pp.tt ? 'Transactor Type: ' + (pp.tt === 'individual' ? 'individual' : 'entity') : '';
+  }
+  function fillContact() {
+    var cef = st.drive && st.drive.cef, pp = partyPerson();
+    if (!st.dirty.addr && cef && cef.address) {
+      $('f-addr1').value = cef.address[0] || ''; $('f-addr2').value = cef.address[1] || '';
+    }
+    if (!st.dirty.phone) $('f-phone').value = (cef && cef.phone) || (pp && pp.phone) || '';
+  }
+  function refreshEntityNames() {
+    var opts = [], pi = st.party ? st.party.info : {}, f = st.party && st.party.facts;
+    var cef = st.drive && st.drive.cef;
+    if (cef && cef.kind === 'entity' && cef.name)
+      opts.push({ v: cef.name, group: 'Client Engagement Form', src: 'CEF “Name of Entity Client” (' + cef.file + ')' });
+    (f ? f.legal : []).forEach(function (l) { opts.push({ v: l[0], group: 'Pipeline deals', src: l[1] }); });
+    if (st.deal) {
+      if (st.deal.sl) opts.push({ v: st.deal.sl, group: 'Pipeline deals', src: 'Seller Legal Name · deal #' + st.deal.id });
+      if (st.deal.bl) opts.push({ v: st.deal.bl, group: 'Pipeline deals', src: 'Buyer Legal Name · deal #' + st.deal.id });
+    }
+    (st.drive ? st.drive.entity_names : []).forEach(function (n) { opts.push({ v: n, group: 'Drive agreement files', src: 'Agreement file name in Drive' }); });
+    if (pi.coName) opts.push({ v: pi.coName, group: 'Pipeline company', src: 'Pipeline company name' });
+    // Keep the user's own pick across async refreshes; otherwise preselect the first candidate.
+    var keep = st.dirty.entity ? $('f-entity').value : '';
+    fillSelect($('f-entity'), opts, (keep && keep !== OWN) ? keep : (opts[0] && opts[0].v));
+    if (keep === OWN) { $('f-entity').value = OWN; syncOwn($('f-entity')); }
+  }
+  function refreshSigner() {
+    var opts = [], pi = st.party ? st.party.info : {}, f = st.party && st.party.facts;
+    (f ? f.team : []).forEach(function (t) { opts.push({ v: t[1], label: t[1] + (t[2] ? ' — ' + t[2] : '') }); });
+    partyPool().forEach(function (p) { opts.push({ v: p[1] }); });
+    var pre = pi.person ? pi.person[1] : (opts[0] && opts[0].v);
+    fillSelect($('f-signer'), opts, pre);
+  }
+  function refreshInvestorLevel() {
+    var pp = partyPerson(), b = $('il-badge');
+    var show = side() === 'buy' && pp && pp.il;
+    b.style.display = show ? 'inline-block' : 'none';
+    b.innerHTML = show ? '<span>Investor level</span> ' + esc(pp.il) : '';
+    $('row-platinum').style.display = side() === 'buy' ? '' : 'none';
   }
   function refreshIssuerLegal() {
     var iss = st.issuer, opts = [];
-    if (iss && iss.legal) opts.push({ v: iss.legal, label: iss.legal + '  — Legal Name' });
+    if (iss && iss.legal) opts.push({ v: iss.legal });
     if (iss && iss.name) opts.push({ v: iss.name, label: iss.name + '  — Pipeline name' });
     fillSelect($('f-issuer-legal'), opts, iss ? (iss.legal || iss.name) : '');
     $('issuer-legal-note').style.display = (iss && !iss.legal) ? 'block' : 'none';
@@ -3831,29 +4365,47 @@ ENG_JS = r"""
       $('f-issuer').value = it.ref.co;
       refreshStructure(it.ref.st);
       $('start-picked').textContent = 'Deal #' + it.ref.id + (it.ref.stage ? ' · ' + it.ref.stage : '');
+      if (!st.typeTouched && it.ref.side) setType((it.ref.side === 'Buy' ? 'buy' : 'sell') + '_full');
     } else {
       st.person = it.ref; st.deal = null; st.issuer = null;
       $('f-issuer').value = '';
       refreshStructure([]);
       $('start-picked').textContent = 'Person #' + it.ref[0];
     }
-    refreshParty();
-    refreshSellerAndSigner();
+    refreshPartyOptions();
     refreshIssuerLegal();
-    preview();
+    onPartyChange();
   }
 
-  typeahead($('f-start'), $('f-start-list'), function (toks) {
-    return startIndex.filter(function (it) { return matchAll(it.hay, toks); });
+  typeahead($('f-start'), $('f-start-list'), function (toks, q, cb) {
+    var deals = dealIndex.filter(function (it) { return matchAll(it.hay, toks); }).slice(0, 25);
+    cb(deals);
+    clearTimeout(peopleTimer);
+    var my = ++seq.people;
+    peopleTimer = setTimeout(function () {
+      api({ api: 'people', q: q }, function (err, j) {
+        if (my !== seq.people || err) return;
+        cb(deals.concat(j.people.map(function (p) {
+          return { kind: 'person', tag: 'Person', label: p[1] + (p[2] ? ' · ' + p[2] : ''), ref: p };
+        })));
+      });
+    }, 180);
   }, onStart);
-  typeahead($('f-issuer'), $('f-issuer-list'), function (toks) {
-    return companyIndex.filter(function (it) { return matchAll(it.hay, toks); });
+  typeahead($('f-issuer'), $('f-issuer-list'), function (toks, q, cb) {
+    cb(companyIndex.filter(function (it) { return matchAll(it.hay, toks); }));
   }, function (it) { st.issuer = it.ref; refreshIssuerLegal(); preview(); });
 
   // ── Fees ──
-  function resetFees() {
-    for (var i = 0; i < 4; i++) $('f-fee-' + i).value = STD_FEES[i];
-    preview();
+  function setFees(vals) { for (var i = 0; i < 4; i++) $('f-fee-' + i).value = vals[i]; }
+  function feeLine(i) {
+    var p = $('f-fee-' + i).value.trim();
+    return C.fee_templates[i].replace('{p}', p || '[%]');
+  }
+  function money(s) {
+    var t = String(s || '').replace(/[$,\s]/g, '');
+    if (!t || isNaN(Number(t))) return '';
+    var parts = t.split('.');
+    return '$' + parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (parts[1] ? '.' + parts[1] : '') + '.';
   }
 
   // ── Preview ──
@@ -3862,86 +4414,122 @@ ENG_JS = r"""
              : '<span class="pv-missing">' + esc(fallback) + '</span>';
   }
   function preview() {
-    var full = document.querySelector('input[name="f-type"]:checked').value === 'full';
+    var full = isFull(), sd = side(), Party = sd === 'buy' ? 'Buyer' : 'Seller';
     $('row-txn').style.display = full ? 'none' : '';
+    refreshInvestorLevel();
     var date = $('f-date').value.trim();
-    var signer = val('f-signer'), seller = val('f-seller');
+    var signer = val('f-signer'), entity = val('f-entity'), title = $('f-title').value.trim();
+    var a1 = $('f-addr1').value.trim(), a2 = $('f-addr2').value.trim(), phone = $('f-phone').value.trim();
     var issuer = val('f-issuer-legal');
     var structure = $('f-structure').value;
     var tail = $('f-tail').value.trim();
     var txn = full ? '1' : $('f-txn').value.trim();
-    var fees = [];
-    for (var i = 0; i < 4; i++) {
-      var f = $('f-fee-' + i).value.trim();
-      if (f) fees.push(f);
-    }
+    var ent = ptype() === 'entity';
     var out = '';
     if (full) {
-      out += '<div class="pv-sec"><div class="pv-h">Agreement</div><p>This Sell-Side Agent Agreement (“<i>Agreement</i>”) ' +
-        'is made and entered into as of ' + hl(date, '[date]') + ' (“<i>Effective Date</i>”), by and between ' +
-        'Rainmaker Securities, LLC, a FINRA registered broker-dealer with CRD# 132995 (“<i>RMS</i>”) and ' +
-        '“<i>Seller</i>” with a name and address as specified on the signature page to this Agreement.</p></div>';
-      out += '<div class="pv-sec"><div class="pv-h">Signature block</div><div class="pv-sig">' +
-        '<div><b>' + hl(signer, '[signer]') + '</b></div><div><b>' + hl(seller, '[seller entity]') + '</b></div>' +
-        '<div class="pv-line">Signature</div></div></div>';
+      out += '<div class="pv-sec"><div class="pv-h">Agreement</div><p>This ' + (sd === 'buy' ? 'Buy' : 'Sell') +
+        '-Side Agent Agreement (“<i>Agreement</i>”) is made and entered into as of ' + hl(date, '[date]') +
+        ' (“<i>Effective Date</i>”), by and between Rainmaker Securities, LLC, a FINRA registered broker-dealer ' +
+        'with CRD# 132995 (“<i>RMS</i>”) and “<i>' + Party + '</i>” with a name and address as specified on the ' +
+        'signature page to this Agreement.</p></div>';
+      var addr = '<div class="pv-kv"><span>Address:</span><div>' + hl(a1, '[street]') + '<br>' + hl(a2, '[city, state, zip, country]') + '</div></div>' +
+        '<div class="pv-kv"><span>Phone:</span><div>' + hl(phone, '[phone]') + '</div></div>';
+      var sig = ent
+        ? '<div class="pv-ent">' + hl((entity || '').toUpperCase(), '[ENTITY NAME]') + '</div>' +
+          '<div class="pv-kv"><span>By:</span><div><span class="uline wide"></span></div></div>' +
+          '<div class="pv-kv"><span>Name:</span><div>' + hl(signer, '[signer]') + '</div></div>' +
+          '<div class="pv-kv"><span>Title:</span><div>' + hl(title, '[title]') + '</div></div>' + addr
+        : '<div class="pv-kv"><span></span><div><span class="uline wide"></span> (Signature)</div></div>' +
+          '<div class="pv-kv"><span>Name:</span><div>' + hl(signer, '[signer]') + '</div></div>' + addr;
+      out += '<div class="pv-sec"><div class="pv-h">Signature block</div><div class="pv-sig">' + sig +
+        '<div class="pv-rms"><b>RAINMAKER SECURITIES, LLC</b><br><b>By: Glen Anderson, President</b><br>' +
+        '382 NE 191st St. #86647 Miami, FL 33179-3899</div></div></div>';
     }
     var securities = full
       ? 'The securities of the Issuer, or the interests in an entity holding the securities of the Issuer, whether directly or indirectly.'
       : 'The securities of the Issuer.';
+    var fees = '';
+    for (var i = 0; i < 4; i++) fees += '<li>' + hl(feeLine(i)) + '</li>';
+    var minRow = $('f-min-on').checked
+      ? '<tr><th>Minimum Commission.</th><td>' + hl(money($('f-min-amt').value), '[amount]') + '</td></tr>' : '';
+    var scope = sd === 'buy'
+      ? '<tr><th>Scope of Coverage.</th><td>For the avoidance of doubt, the scope of this Agreement and any Success Fee ' +
+        'obligations extend to any and all transactions, securities sales, or fund allocations completed between the ' +
+        'Parties during the Tail Period, regardless of whether the specific Issuer or security was listed on Schedule A ' +
+        'at the time of Referral.</td></tr>' : '';
     out += '<div class="pv-sec"><div class="pv-h">Schedule A</div>' +
       '<div class="pv-txn">TRANSACTION ' + hl(txn, '[#]') + '</div><table class="pv-tbl">' +
       '<tr><th>Issuer.</th><td>' + hl(issuer, '[issuer]') + '</td></tr>' +
       '<tr><th>Securities.</th><td>' + esc(securities) + '</td></tr>' +
-      '<tr><th>Success Fee.</th><td>The Success Fee shall be calculated as:<ul>' +
-        (fees.length ? fees.map(function (f) { return '<li>' + hl(f) + '</li>'; }).join('')
-                     : '<li><span class="pv-missing">[no fee lines]</span></li>') + '</ul></td></tr>' +
+      '<tr><th>Success Fee.</th><td>The Success Fee shall be calculated as:<ul>' + fees + '</ul></td></tr>' +
+      minRow +
       '<tr><th>Tail Period.</th><td>The ' + hl(tail, '[N]') + ' month period after the Referral.</td></tr>' +
+      scope +
       '<tr><th>Anticipated Structure.</th><td>' + hl(structure, '[structure]') + '</td></tr>' +
-      '</table></div>';
+      '<tr><th>Initials.</th><td><table class="pv-init">' +
+        '<tr><td>' + Party + ':</td><td><span class="uline"></span></td><td>Date:</td><td><span class="uline"></span></td></tr>' +
+        '<tr><td>RMS:</td><td><span class="uline"></span></td><td>Date:</td><td><span class="uline"></span></td></tr>' +
+      '</table></td></tr></table></div>';
     $('preview').innerHTML = out;
   }
 
   // ── Wire up ──
   $('f-date').value = todayNY();
-  resetFees();
-  ['f-party'].forEach(function (id) {
-    $(id).addEventListener('change', function () { refreshSellerAndSigner(); preview(); });
+  setFees(C.fees_standard);
+  $('f-generous').addEventListener('change', function () {
+    setFees(this.checked ? C.fees_generous : C.fees_standard); preview();
   });
-  ['f-seller', 'f-signer', 'f-issuer-legal'].forEach(function (id) {
+  document.querySelectorAll('input[name="f-type"]').forEach(function (r) {
+    r.addEventListener('change', function () { st.typeTouched = true; preview(); });
+  });
+  document.querySelectorAll('input[name="f-ptype"]').forEach(function (r) {
+    r.addEventListener('change', function () { st.ptypeTouched = true; syncPartyTypeUI(); preview(); });
+  });
+  $('f-party').addEventListener('change', onPartyChange);
+  $('f-entity').addEventListener('change', function () { st.dirty.entity = true; });
+  ['f-entity', 'f-signer', 'f-issuer-legal'].forEach(function (id) {
     $(id).addEventListener('change', function () { syncOwn($(id)); preview(); });
   });
+  ['f-addr1', 'f-addr2'].forEach(function (id) { $(id).addEventListener('input', function () { st.dirty.addr = true; }); });
+  $('f-phone').addEventListener('input', function () { st.dirty.phone = true; });
+  $('f-min-on').addEventListener('change', function () { $('f-min-amt').disabled = !this.checked; });
   document.querySelectorAll('#eng-form input, #eng-form select').forEach(function (el) {
     el.addEventListener('input', preview);
     el.addEventListener('change', preview);
   });
-  $('fee-reset').addEventListener('click', function (e) { e.preventDefault(); resetFees(); });
   fillSelect($('f-party'), [], '', false); $('f-party').disabled = true;
-  fillSelect($('f-seller'), [], '');
+  fillSelect($('f-entity'), [], '');
   fillSelect($('f-signer'), [], '');
   fillSelect($('f-issuer-legal'), [], '');
+  syncPartyTypeUI();
   preview();
 })();
 """
 
 
 def render_engagement():
-    """Admin-only Engagement Docs page (phase 1: read-only form + live preview)."""
+    """Admin-only Engagement Docs page (read-only form + live preview)."""
     try:
         data = _engagement_data()
-        load_err = ""
+        page, counts, source, load_err = data["page"], data["counts"], data["source"], ""
     except Exception as e:
         print(f"engagement: data load failed: {e}")
-        data = {"deals": [], "companies": [], "people": [], "source": "",
-                "counts": {"deals_total": 0, "deals_live": 0, "companies": 0, "people": 0}}
-        load_err = "Couldn't load Pipeline data from S3."
+        page = {"deals": [], "companies": []}
+        counts = {"deals_total": 0, "deals_live": 0, "deals_closed": 0, "closed_ok": False,
+                  "companies": 0, "people": 0}
+        source, load_err = "", "Couldn't load Pipeline data from S3."
     # JSON inside <script> is safe once "</" can't close the tag.
-    data_json = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
-    fees_json = json.dumps(ENG_STANDARD_FEES).replace("</", "<\\/")
-    c = data["counts"]
-    meta = (f'{c["deals_live"]} live deals (of {c["deals_total"]}) · {c["companies"]} companies · '
-            f'{c["people"]} people from {html.escape(data.get("source") or "—")}')
-    fee_boxes = "".join(
-        f'<input type="text" id="f-fee-{i}" class="full" autocomplete="off">' for i in range(4))
+    data_json = json.dumps(page, separators=(",", ":")).replace("</", "<\\/")
+    const_json = json.dumps({"fee_templates": ENG_FEE_TEMPLATES, "fees_standard": ENG_FEES_STANDARD,
+                             "fees_generous": ENG_FEES_GENEROUS}).replace("</", "<\\/")
+    c = counts
+    meta = (f'{c["deals_live"]} live deals (of {c["deals_total"]}) · '
+            f'{c["deals_closed"] if c["closed_ok"] else "no"} closed deals · {c["companies"]} companies · '
+            f'{c["people"]} people from {html.escape(source or "—")}')
+    fee_rows = "".join(
+        f'<div class="fee-row"><input type="text" inputmode="decimal" id="f-fee-{i}" class="pct">'
+        f'<span>{html.escape(t.replace("{p}", ""))}</span></div>'
+        for i, t in enumerate(ENG_FEE_TEMPLATES))
     css = """
     <style>
       .eng-wrap { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:28px; margin-top:18px; }
@@ -3954,12 +4542,21 @@ def render_engagement():
       #eng-form input[type=text], #eng-form input[type=number], #eng-form select {
         width:100%; font:inherit; font-size:14px; padding:8px 10px; border:1px solid var(--line);
         border-radius:8px; background:#fff; color:var(--ink); }
-      #eng-form .full { margin-bottom:6px; }
+      #eng-form input:disabled { background:#f3f2ee; color:#9a978f; }
       #eng-form .own { margin-top:6px; display:none; }
-      #eng-form .radios label:not(.lbl) { display:inline-flex; align-items:center; gap:6px;
-        margin:0 18px 0 0; font-size:14px; }
-      #eng-form .radios input { width:auto; margin:0; }
+      #eng-form .stack input + input { margin-top:6px; }
+      #eng-form .radios label:not(.lbl), #eng-form .chk { display:inline-flex; align-items:center; gap:6px;
+        margin:0 18px 4px 0; font-size:14px; }
+      #eng-form .radios input, #eng-form .chk input { width:auto; margin:0; }
+      .type-grid { display:grid; grid-template-columns:1fr 1fr; gap:2px 12px; }
       .note { font-size:12px; color:#9a978f; margin-top:4px; }
+      .fee-row { display:flex; align-items:baseline; gap:6px; font-size:13px; line-height:1.4; margin-bottom:6px; }
+      #eng-form .fee-row input.pct { width:58px; flex:none; padding:5px 6px; text-align:right; }
+      .min-row { display:flex; align-items:center; gap:10px; }
+      #eng-form .min-row input[type=text] { width:140px; }
+      .badge { display:none; font-size:12px; padding:2px 8px; border-radius:999px; background:#eef2ff;
+        color:#3730a3; margin-top:6px; }
+      .badge span { color:#6b7280; }
       .ta { position:relative; }
       .ta-list { display:none; position:absolute; left:0; right:0; top:100%; z-index:20; background:#fff;
         border:1px solid var(--line); border-radius:8px; max-height:320px; overflow-y:auto;
@@ -3977,27 +4574,37 @@ def render_engagement():
         font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-bottom:6px; }
       .pv-val { background:#fff4c2; border-radius:3px; padding:0 2px; }
       .pv-missing { color:#b23b3b; }
-      .pv-sig div { margin-bottom:2px; }
-      .pv-line { border-top:1px solid var(--ink); width:220px; margin-top:22px; font-size:12px; }
+      .pv-ent { font-weight:700; margin-bottom:6px; }
+      .pv-kv { display:flex; gap:8px; margin-bottom:3px; }
+      .pv-kv > span { width:62px; flex:none; }
+      .pv-rms { margin-top:16px; }
+      .uline { display:inline-block; width:120px; border-bottom:1px solid var(--ink); height:1em; vertical-align:bottom; }
+      .uline.wide { width:220px; }
       .pv-txn { text-align:center; font-weight:700; margin:4px 0 10px; }
       .pv-tbl { width:100%; border-collapse:collapse; }
       .pv-tbl th { text-align:left; vertical-align:top; width:34%; padding:6px 8px 6px 0; font-weight:700;
         font-size:14px; text-transform:none; letter-spacing:normal; color:var(--ink); }
       .pv-tbl td { padding:6px 0; vertical-align:top; }
       .pv-tbl ul { margin:4px 0 0 18px; }
+      .pv-init { border-collapse:collapse; }
+      .pv-init td { padding:4px 6px 4px 0; vertical-align:bottom; }
       .gen-btn { margin-top:8px; font:inherit; font-size:14px; font-weight:600; padding:10px 16px;
         border-radius:8px; border:1px solid var(--line); background:#eeece7; color:#9a978f; cursor:not-allowed; }
     </style>"""
     body = css + f"""
     <h1>Engagement Docs</h1>
-    <p class="sub">Sell-side agreement and Schedule A. Read-only preview — nothing is generated or sent yet.</p>
+    <p class="sub">Agent agreement and Schedule A. Read-only preview — nothing is generated or sent yet.</p>
     <p class="eng-meta">{meta}</p>
     {f'<p class="eng-err">{html.escape(load_err)}</p>' if load_err else ''}
     <div class="eng-wrap">
       <form id="eng-form" autocomplete="off" onsubmit="return false">
         <div class="row radios"><label class="lbl">Type</label>
-          <label><input type="radio" name="f-type" value="full" checked> Full sell-side agreement</label>
-          <label><input type="radio" name="f-type" value="schedule"> Schedule A only</label>
+          <div class="type-grid">
+            <label><input type="radio" name="f-type" value="sell_full" checked> Sell-side full agreement</label>
+            <label><input type="radio" name="f-type" value="sell_sched"> Sell-side Schedule A</label>
+            <label><input type="radio" name="f-type" value="buy_full"> Buy-side full agreement</label>
+            <label><input type="radio" name="f-type" value="buy_sched"> Buy-side Schedule A</label>
+          </div>
         </div>
         <div class="row"><label class="lbl" for="f-start">Start from</label>
           <div class="ta"><input type="text" id="f-start" placeholder="Search live deals or people…">
@@ -4005,16 +4612,30 @@ def render_engagement():
           <div class="note" id="start-picked"></div>
         </div>
         <div class="row"><label class="lbl" for="f-party">Party</label>
-          <select id="f-party"></select></div>
-        <div class="row"><label class="lbl" for="f-issuer">Company (issuer)</label>
-          <div class="ta"><input type="text" id="f-issuer" placeholder="Search Pipeline companies…">
-            <div class="ta-list" id="f-issuer-list"></div></div></div>
-        <div class="row"><label class="lbl" for="f-seller">Seller entity</label>
-          <select id="f-seller"></select>
-          <input type="text" id="f-seller-own" class="own" placeholder="Seller entity"></div>
+          <select id="f-party"></select>
+          <span class="badge" id="il-badge"></span>
+          <div class="note" id="drive-note"></div></div>
+        <div class="row radios"><label class="lbl">Party type</label>
+          <label><input type="radio" name="f-ptype" value="individual" checked> Individual</label>
+          <label><input type="radio" name="f-ptype" value="entity"> Entity</label>
+          <div class="note" id="ptype-note"></div></div>
+        <div class="row" id="row-entity"><label class="lbl" for="f-entity">Entity name</label>
+          <select id="f-entity"></select>
+          <input type="text" id="f-entity-own" class="own" placeholder="Entity name">
+          <div class="note" id="f-entity-src"></div></div>
         <div class="row"><label class="lbl" for="f-signer">Signer</label>
           <select id="f-signer"></select>
           <input type="text" id="f-signer-own" class="own" placeholder="Signer name"></div>
+        <div class="row" id="row-title"><label class="lbl" for="f-title">Title</label>
+          <input type="text" id="f-title" value="Authorized Signatory"></div>
+        <div class="row stack"><label class="lbl" for="f-addr1">Address</label>
+          <input type="text" id="f-addr1" placeholder="Street">
+          <input type="text" id="f-addr2" placeholder="City, state, zip, country"></div>
+        <div class="row"><label class="lbl" for="f-phone">Phone</label>
+          <input type="text" id="f-phone"></div>
+        <div class="row"><label class="lbl" for="f-issuer">Company (issuer)</label>
+          <div class="ta"><input type="text" id="f-issuer" placeholder="Search Pipeline companies…">
+            <div class="ta-list" id="f-issuer-list"></div></div></div>
         <div class="row"><label class="lbl" for="f-issuer-legal">Issuer legal name</label>
           <select id="f-issuer-legal"></select>
           <input type="text" id="f-issuer-legal-own" class="own" placeholder="Issuer legal name">
@@ -4023,8 +4644,14 @@ def render_engagement():
           <select id="f-structure"><option value=""></option><option>Direct</option>
             <option>SPV</option><option>Forward</option></select>
           <div class="note" id="structure-note"></div></div>
-        <div class="row"><label class="lbl">Success fee</label>{fee_boxes}
-          <div class="note">A blank box drops that line. <a href="#" id="fee-reset">Reset to standard</a></div></div>
+        <div class="row"><label class="lbl">Success fee</label>{fee_rows}
+          <label class="chk"><input type="checkbox" id="f-generous"> Generous fees</label></div>
+        <div class="row"><label class="lbl">Minimum commission</label>
+          <div class="min-row"><label class="chk"><input type="checkbox" id="f-min-on"> Apply</label>
+            <input type="text" id="f-min-amt" value="7,500" disabled></div></div>
+        <div class="row" id="row-platinum" style="display:none">
+          <label class="chk"><input type="checkbox" id="f-platinum" disabled>
+            Platinum client: apply commission discounts (coming soon)</label></div>
         <div class="row"><label class="lbl" for="f-tail">Tail (months)</label>
           <input type="number" id="f-tail" value="12" min="0"></div>
         <div class="row" id="row-txn" style="display:none"><label class="lbl" for="f-txn">Transaction #</label>
@@ -4036,7 +4663,7 @@ def render_engagement():
       <div class="eng-preview" id="preview"></div>
     </div>
     <script type="application/json" id="eng-data">{data_json}</script>
-    <script type="application/json" id="eng-fees">{fees_json}</script>
+    <script type="application/json" id="eng-const">{const_json}</script>
     <script>""" + ENG_JS + "</script>"
     return html_response(body, eyebrow="Admin", is_admin=True, view="engagement")
 
@@ -6632,7 +7259,7 @@ def _route(event, context):
     if qs.get("view") == "sendlink" and is_admin:
         return render_send_link()
     if qs.get("view") == "engagement" and is_admin:
-        return render_engagement()
+        return _engagement_route(qs)
     # The two pages this one replaced. Bookmarks and pasted URLs still land somewhere
     # useful, and the address bar corrects itself to the canonical route.
     if qs.get("view") in ("link", "deallinks") and is_admin:
