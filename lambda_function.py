@@ -3911,9 +3911,9 @@ def _eng_match_client_folders(client_name, client_type, folders):
 
 _ENG_CEF_LABELS = [
     ("entity_name", r"Name\s+of\s+Entity\s+Client"),
-    ("entity_addr", r"Principal\s+Place\s+of\s+Business\s+of\s+Entity\s+Client"),
+    ("_", r"Principal\s+Place\s+of\s+Business\s+of\s+Entity\s+Client"),
     ("person_name", r"Name\s+of\s+Natural\s+Person\s+Client"),
-    ("person_addr", r"Address\s+of\s+Client"),
+    ("_", r"Address\s+of\s+Client"),
     ("phone", r"(?:Client\s+)?(?:Phone|Telephone)(?:\s+Number)?"),
     ("_", r"Client\s+Email|Email(?:\s+Address)?|OPTIONAL:|Entity\s+Client\s+US\s+Tax\s+ID"
           r"|Client'?s\s+Total\s+Assets|Entity\s+Control\s+Person|Name\s+of\s+Entity\s+Control"
@@ -3925,8 +3925,8 @@ _ENG_CEF_NOISE = re.compile(r"^(?:PDF|IMG|JPG|JPEG|PNG|\d{1,2})$|\.(?:pdf|jpe?g|
 
 
 def _eng_parse_cef(text):
-    """Pull the client's name, address and phone out of a Jotform CEF's text.
-    Returns {"kind": "entity"|"individual"|"", "name", "address": [l1, l2], "phone"}."""
+    """Pull the client's name and phone out of a Jotform CEF's text.
+    Returns {"kind": "entity"|"individual"|"", "name", "phone"}."""
     hits = []
     for key, pat in _ENG_CEF_LABELS:
         for m in re.finditer(pat, text):
@@ -3946,20 +3946,16 @@ def _eng_parse_cef(text):
         lines = [ln.strip() for ln in text[e:nxt].splitlines()]
         vals[key] = [ln for ln in lines if ln and not _ENG_CEF_NOISE.search(ln)]
 
-    def addr(lines):
-        lines = lines[:4]
-        return [lines[0], ", ".join(lines[1:])] if lines else ["", ""]
-
     phone = " ".join(vals.get("phone", [])[:1])
     if not re.search(r"\d{3}", phone):
         phone = ""
     if vals.get("entity_name"):
         return {"kind": "entity", "name": vals["entity_name"][0],
-                "address": addr(vals.get("entity_addr", [])), "phone": phone}
+                "phone": phone}
     if vals.get("person_name"):
         return {"kind": "individual", "name": vals["person_name"][0],
-                "address": addr(vals.get("person_addr", [])), "phone": phone}
-    return {"kind": "", "name": "", "address": ["", ""], "phone": phone}
+                "phone": phone}
+    return {"kind": "", "name": "", "phone": phone}
 
 
 def _eng_cef_text(pdf_bytes):
@@ -4658,7 +4654,7 @@ ENG_JS = r"""
     st.ptypeTouched = false;
     st.dirty = {};
     $('f-title').value = 'Authorized Signatory';
-    $('f-addr1').value = ''; $('f-addr2').value = ''; $('f-phone').value = '';
+    $('f-phone').value = '';
     $('drive-note').textContent = '';
     applyPartyType();
     refreshEntityNames(); refreshSigner(); refreshInvestorLevel();
@@ -4721,9 +4717,6 @@ ENG_JS = r"""
   }
   function fillContact() {
     var cef = st.drive && st.drive.cef, pp = partyPerson();
-    if (!st.dirty.addr && cef && cef.address) {
-      $('f-addr1').value = cef.address[0] || ''; $('f-addr2').value = cef.address[1] || '';
-    }
     if (!st.dirty.phone) $('f-phone').value = (cef && cef.phone) || (pp && pp.phone) || '';
   }
   function refreshEntityNames() {
@@ -4831,7 +4824,7 @@ ENG_JS = r"""
     refreshInvestorLevel();
     var date = $('f-date').value.trim();
     var signer = val('f-signer'), entity = val('f-entity'), title = $('f-title').value.trim();
-    var a1 = $('f-addr1').value.trim(), a2 = $('f-addr2').value.trim(), phone = $('f-phone').value.trim();
+    var phone = $('f-phone').value.trim();
     var issuer = val('f-issuer-legal');
     var structure = $('f-structure').value;
     var tail = $('f-tail').value.trim();
@@ -4844,7 +4837,9 @@ ENG_JS = r"""
         ' (“<i>Effective Date</i>”), by and between Rainmaker Securities, LLC, a FINRA registered broker-dealer ' +
         'with CRD# 132995 (“<i>RMS</i>”) and “<i>' + Party + '</i>” with a name and address as specified on the ' +
         'signature page to this Agreement.</p></div>';
-      var addr = '<div class="pv-kv"><span>Address:</span><div>' + hl(a1, '[street]') + '<br>' + hl(a2, '[city, state, zip, country]') + '</div></div>' +
+      // Address lines stay blank, as on the template's signature page.
+      var addr = '<div class="pv-kv"><span></span><div><span class="uline wide"></span><div class="pv-cap">Address</div></div></div>' +
+        '<div class="pv-kv"><span></span><div><span class="uline wide"></span><div class="pv-cap">City/State/Zip</div></div></div>' +
         '<div class="pv-kv"><span>Phone:</span><div>' + hl(phone, '[phone]') + '</div></div>';
       var sig = ent
         ? '<div class="pv-ent">' + hl((entity || '').toUpperCase(), '[ENTITY NAME]') + '</div>' +
@@ -4901,7 +4896,7 @@ ENG_JS = r"""
     var full = isFull(), sd = side(), Party = sd === 'buy' ? 'Buyer' : 'Seller';
     var T = PT[sd], ent = ptype() === 'entity';
     var date = $('f-date').value.trim(), signer = val('f-signer'), entity = val('f-entity');
-    var title = $('f-title').value.trim(), a1 = $('f-addr1').value.trim(), a2 = $('f-addr2').value.trim();
+    var title = $('f-title').value.trim();
     var phone = $('f-phone').value.trim(), issuer = val('f-issuer-legal'), structure = $('f-structure').value;
     var tail = $('f-tail').value.trim(), txn = full ? '1' : $('f-txn').value.trim();
     var h = [], sec = 0, clause = 0, sub1 = 0, sub2 = 0, rec = 0, firstP = true;
@@ -4945,7 +4940,9 @@ ENG_JS = r"""
         if (k === 's2') { sub2++; h.push('<p class="s2"><span class="n">(' + roman(sub2) + ')</span>' + esc(b[1]) + '</p>'); return; }
         if (k === 'sigfollow') { h.push('<p class="sigfollow">' + esc(b[1]) + '</p>'); return; }
         if (k === 'sigp') {
-          var addr = '<tr><td>Address:</td><td>' + blank(a1, 1) + '<br>' + blank(a2, 1) + '</td></tr>' +
+          // Address lines stay blank, as on the template's signature page.
+          var addr = '<tr><td></td><td class="fl"><span class="ul wide"></span><div class="cap">Address</div></td></tr>' +
+                     '<tr><td></td><td class="fl"><span class="ul wide"></span><div class="cap">City/State/Zip</div></td></tr>' +
                      '<tr><td>Phone:</td><td>' + blank(phone, 1) + '</td></tr>';
           var blk = ent
             ? '<div class="entname">' + (entity ? esc(entity.toUpperCase()) : '<span class="ul wide"></span>') + '</div><table class="sig">' +
@@ -5008,7 +5005,8 @@ ENG_JS = r"""
       '.sigpage,.sched.brk{break-before:page;page-break-before:always}' +
       '.entname{font-weight:700;margin:28px 0 10px}' +
       'table.sig{border-collapse:collapse;margin-top:6px}table.sig td{padding:5px 8px 5px 0;vertical-align:bottom}' +
-      'table.sig td:first-child{width:0.8in}' +
+      'table.sig td:first-child{width:0.8in}table.sig td.fl{padding-top:14px}' +
+      '.cap{font-size:10pt;font-weight:700;margin-top:2px}' +
       '.rms{margin-top:36px}' +
       '.ul{display:inline-block;width:1.6in;border-bottom:1px solid #000;height:1.1em;vertical-align:bottom}' +
       '.ul.wide{width:3in}.ul.short{width:0.5in}' +
@@ -5042,7 +5040,6 @@ ENG_JS = r"""
   ['f-entity', 'f-signer', 'f-issuer-legal'].forEach(function (id) {
     $(id).addEventListener('change', function () { syncOwn($(id)); preview(); });
   });
-  ['f-addr1', 'f-addr2'].forEach(function (id) { $(id).addEventListener('input', function () { st.dirty.addr = true; }); });
   $('f-phone').addEventListener('input', function () { st.dirty.phone = true; });
   $('print-btn').addEventListener('click', printDoc);
   $('f-min-on').addEventListener('change', function () { $('f-min-amt').disabled = !this.checked; });
@@ -5133,6 +5130,7 @@ def render_engagement():
       .pv-kv { display:flex; gap:8px; margin-bottom:3px; }
       .pv-kv > span { width:62px; flex:none; }
       .pv-rms { margin-top:16px; }
+      .pv-cap { font-size:12px; font-weight:700; margin-top:2px; }
       .uline { display:inline-block; width:120px; border-bottom:1px solid var(--ink); height:1em; vertical-align:bottom; }
       .uline.wide { width:220px; }
       .pv-txn { text-align:center; font-weight:700; margin:4px 0 10px; }
@@ -5185,9 +5183,6 @@ def render_engagement():
           <input type="text" id="f-signer-own" class="own" placeholder="Signer name"></div>
         <div class="row" id="row-title"><label class="lbl" for="f-title">Title</label>
           <input type="text" id="f-title" value="Authorized Signatory"></div>
-        <div class="row stack"><label class="lbl" for="f-addr1">Address</label>
-          <input type="text" id="f-addr1" placeholder="Street">
-          <input type="text" id="f-addr2" placeholder="City, state, zip, country"></div>
         <div class="row"><label class="lbl" for="f-phone">Phone</label>
           <input type="text" id="f-phone"></div>
         <div class="row"><label class="lbl" for="f-issuer">Company (issuer)</label>
