@@ -1927,18 +1927,20 @@ def _tiers_card_html(st, tiers_href=""):
         cols += (f'<div class="tc-tier{" cur" if cur else (" muted" if tier in keys else "")}">'
                  f'<div class="tc-head"><span class="tc-name">{html.escape(name)}</span>{tag}</div>'
                  f'<div class="tc-pct">{pct}% <small>off</small></div>'
-                 f'<p class="tc-req">{html.escape(req)}</p></div>')
+                 '<ul class="tc-req">' + "".join(f'<li>{html.escape(x)}</li>' for x in req) + '</ul></div>')
     trades_note = ""
     for it in (st.get("items") or []):
         if isinstance(it, dict) and it.get("key") == "trades":
             trades_note = str(it.get("note") or "").strip()
     if tier == keys[-1]:
         nxt = "You&rsquo;re at our top tier."
-    elif tier in keys or st.get("good_standing") is True:
-        _k, name, pct, req, _i = COMMISSION_TIERS[keys.index(tier) + 1 if tier in keys else 0]
-        nxt = f"<b>Next: {html.escape(name)} ({pct}% off)</b> &mdash; {html.escape(req)}."
-        if tier in keys and trades_note:
+    elif tier in keys:
+        _k, name, pct, req, _i = COMMISSION_TIERS[keys.index(tier) + 1]
+        nxt = f"<b>Next: {html.escape(name)} ({pct}% off)</b> &mdash; {html.escape(req[-1])}."
+        if trades_note:
             nxt += f" You&rsquo;re at {html.escape(trades_note)}."
+    elif st.get("good_standing") is True:
+        nxt = "Introduce a new client who completes onboarding to reach Preferred."
     else:
         nxt = "Complete the open items above to qualify."
     link = (f'<p class="tc-link"><a href="{tiers_href}" target="_blank" rel="noopener">How tiers work &rarr;</a></p>'
@@ -2005,7 +2007,7 @@ _STATUS_CARD_CSS = """
   .cts .tc-pct { font-size: 22px; font-weight: 600; color: var(--navy); line-height: 1.15;
                  font-variant-numeric: tabular-nums; }
   .cts .tc-pct small { font-size: 12px; font-weight: 400; color: var(--muted); }
-  .cts .tc-req { font-size: 14px; }
+  .cts .tc-req { font-size: 14px; margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; }
   .cts .tc-next { font-size: 14px; }
   .cts .tc-next b { color: var(--navy); }
   .cts .tc-link { font-size: 14px; }
@@ -8010,16 +8012,18 @@ def _viewing_as_bar(client_id):
 
 # The three commission tiers: one source for the ?view=commission-tiers page and
 # the Profile "Commission tiers" card, so the two can never disagree.
-# (key as in standing_json "tier", name, % off, requirement beyond good standing, includes)
+# Requires lines mirror syndicate-dash's live tier logic (STANDING_GOLD_VOLUME_USD /
+# STANDING_GOLD_TRADES_250K, STANDING_PLATINUM_VOLUME_USD / STANDING_PLATINUM_TRADES_1M).
+# (key as in standing_json "tier", name, % off, requires lines, includes)
 COMMISSION_TIERS = (
     ("preferred", "Preferred", 10,
-     "Introduced another new accredited investor who completed onboarding with Rainmaker",
+     ("Good standing", "Introduced a new client who completed onboarding with Rainmaker"),
      ("A 30-minute strategy call on your goals and how I can help",)),
     ("gold", "Gold", 15,
-     "$5M or more in completed trades",
+     ("Good standing", "$5M or more in completed trades, or 3 or more trades of $250K+ each"),
      ("Early look at new blocks", "Strategy calls whenever you need them")),
     ("platinum", "Platinum", 20,
-     "$10M or more in completed trades, or 3 or more trades",
+     ("Good standing", "$10M or more in completed trades, or 5 or more trades of $1M+ each"),
      ("Everything in Gold",
       "When you ask me to find a specific position, I won't offer what I find to my other buyers for 30 days")),
 )
@@ -8034,8 +8038,7 @@ def _commission_tiers_page_block():
                 f'            <div class="pct">{pct}% <small>off</small></div>\n'
                 '            <div class="req">Requires</div>\n'
                 '            <ul>\n'
-                '              <li>Good standing</li>\n'
-                f'              <li>{req}</li>\n'
+                + "".join(f'              <li>{x}</li>\n' for x in req) +
                 '            </ul>\n'
                 '            <div class="req">Includes</div>\n'
                 '            <ul>\n'
@@ -8167,7 +8170,7 @@ tr.base td { font-weight: 600; }
 __TIERS__
       </section>
     </div>
-    <div class="foot"><span>Client Commission Tiers · September 2026</span><span>Page 1 of 2</span></div>
+    <div class="foot"><span>Client Commission Tiers · October 2026</span><span>Page 1 of 2</span></div>
   </article>
 
   <!-- Page 2 -->
@@ -8240,7 +8243,7 @@ __TIERS__
         <p>Limited disclosure information. Companies engaging in private placements are not required to provide the disclosure that would be required in a registered offering. You may have less information to make an informed investment decision than, for example, stock purchased on a stock exchange, including information that may help you determine whether the price asked for the investment is a fair price.</p>
       </section>
     </div>
-    <div class="foot"><span>Client Commission Tiers · September 2026</span><span>Page 2 of 2</span></div>
+    <div class="foot"><span>Client Commission Tiers · October 2026</span><span>Page 2 of 2</span></div>
   </article>
 
 </div>
