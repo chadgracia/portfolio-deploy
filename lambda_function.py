@@ -1805,9 +1805,10 @@ def _fetch_status_card_standing(person_id):
     return data
 
 
-def _post_standing_share(person_id, share):
+def _post_standing_share(person_id, share, actor="client"):
     """POST syndicate-dash ?action=standing_share for this person_id (admin key
-    stays server-side in SYNDICATE_DASH_URL). Returns the new standing_json
+    stays server-side in SYNDICATE_DASH_URL). actor "admin" records the change
+    as an admin change made with the client's permission. Returns the new standing_json
     payload, or None on any failure. Clears then reseeds the 5-minute cache
     entry from the returned payload so the next render shows the change."""
     pid = str(person_id or "").strip()
@@ -1818,7 +1819,7 @@ def _post_standing_share(person_id, share):
     try:
         req = urllib.request.Request(
             SYNDICATE_DASH_URL + "&action=standing_share",
-            data=json.dumps({"pid": pid, "share": bool(share)}).encode(),
+            data=json.dumps({"pid": pid, "share": bool(share), "actor": actor}).encode(),
             headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=5) as resp:
             if resp.status != 200:
@@ -1858,23 +1859,24 @@ def _share_audience(st):
 def _share_card_html(st, viewing_as=False, share_err=False):
     """The sharing card beside "Your status" on Profile. The switch is a submit
     button posting the existing action=standing_share form to this desk route
-    (no key in the page). Disabled when an admin is viewing as the client
-    (consent must come from the client) or when standing_json says
+    (no key in the page). In admin view-as the switch stays enabled (saved as an
+    admin change) with a muted reminder; disabled only when standing_json says
     sharing_locked."""
     aud = _share_audience(st)
     on = st.get("share_with_sellers") is True
     locked = st.get("sharing_locked") is True
-    disabled = viewing_as or locked
+    disabled = locked
     subtitle = ("Buyers move faster with sellers whose onboarding is already in place."
                 if aud == "buyers" else
                 "Sellers prioritize buyers whose onboarding is already in place.")
     note = ""
-    if viewing_as:
-        note = '<p class="sc-note">Only the client can change this.</p>'
-    elif locked:
+    if locked:
         note = '<p class="sc-note">Sharing is turned off for your account.</p>'
     elif share_err:
         note = '<p class="sc-note sc-err">Couldn&rsquo;t save &mdash; please try again.</p>'
+    if viewing_as and not locked:
+        note += ('<p class="sc-note">Changing this as admin &mdash; use only with the '
+                 'client&rsquo;s permission.</p>')
     skip_keys = _SHARE_PREVIEW_SKIP_KEYS + (("qualification",) if aud == "buyers" else ())
     seen = ""
     for it in (st.get("items") or []):
@@ -7514,13 +7516,17 @@ def _route(event, context):
         if action in ("get_bids", "get_offers"):
             notify_interest(portfolio, client_id, form.get("holding_id", ""), action)
             return _json_ok()
-        # Sellers-sharing consent from the Profile card. Only ever the signed-in
-        # client's OWN person_id; an admin viewing as a client (?as= or a
-        # magic-link session swap) is refused -- consent must come from the client.
+        # Sellers-sharing consent from the Profile card. A client only ever changes
+        # their OWN person_id. An admin viewing as a client (?as= or a magic-link
+        # session swap) changes the viewed client's, recorded by syndicate-dash
+        # as an admin change made with the client's permission.
         if action == "standing_share":
             if is_admin and not effective_admin:
-                return {"statusCode": 303, "headers": {"Location": raw_path + "?view=profile"}, "body": ""}
-            ok = _post_standing_share(client_id, form.get("share") == "1") is not None
+                _share_pid = qs["as"] if qs.get("as") else client_id
+                _share_actor = "admin"
+            else:
+                _share_pid, _share_actor = client_id, "client"
+            ok = _post_standing_share(_share_pid, form.get("share") == "1", _share_actor) is not None
             return {"statusCode": 303,
                     "headers": {"Location": raw_path + "?view=profile" + ("" if ok else "&share_err=1")},
                     "body": ""}
