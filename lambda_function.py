@@ -2086,8 +2086,10 @@ def _share_card_html(st, viewing_as=False, share_err=False):
         + note +
         f'<div class="sc-seen"><div class="sc-seen-h">What matched {aud} see</div>'
         f'<ul>{seen}</ul></div>'
-        f'<p class="sc-fine">Shown only to {aud} matched with you or introduced to you. Never published, '
-        'and never includes your trades, amounts, tier or referrals. You can turn this off at any time.</p>'
+        f'<p class="sc-fine">If on: {aud} matched with you see your good-standing checkmarks without your name; '
+        f'{aud} you&rsquo;ve been introduced to see them under your name. No one else ever sees them. '
+        'Never published, and never includes your trades, amounts, tier or referrals. '
+        'You can turn this off anytime.</p>'
         '</div>'
     )
 
