@@ -8025,7 +8025,7 @@ COMMISSION_TIERS = (
     ("platinum", "Platinum", 20,
      ("Good standing", "$10M or more in completed trades, or 5 or more trades of $1M+ each"),
      ("Everything in Gold",
-      "When you ask me to find a specific position, I won't offer what I find to my other buyers for 30 days")),
+      "When you ask me to source a specific position (company, size and price), you get first option on what I find, with 3 business days to commit before I show it to anyone else")),
 )
 
 
