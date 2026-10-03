@@ -1833,31 +1833,74 @@ def _post_standing_share(person_id, share):
     return parsed
 
 
-_SHARE_LABEL = "Share my status with sellers I'm matched with or introduced to"
-_SHARE_HELP = "Sellers always see an anonymous rating; this shares your name with your badges."
+# Rows of standing_json that are never shown to a counterparty (and so are
+# left out of the "What matched ... see" preview): the referral and trades rows.
+_SHARE_PREVIEW_SKIP = ("Completed trades", "Introduced a new client")
 
 
-def _share_toggle_html(st, viewing_as=False, share_err=False):
-    """The consent toggle inside the Profile card. A small form POST to this
-    desk route (action=standing_share) -- no key in the page. Disabled when an
-    admin is viewing as the client: consent must come from the client."""
+def _share_audience(st):
+    """'buyers' for a seller-only client, else 'sellers' (also when roles is missing)."""
+    roles = st.get("roles")
+    if isinstance(roles, dict):
+        seller, buyer = bool(roles.get("seller")), bool(roles.get("buyer"))
+    elif isinstance(roles, (list, tuple)):
+        seller, buyer = "seller" in roles, "buyer" in roles
+    elif isinstance(roles, str):
+        seller, buyer = "seller" in roles.lower(), "buyer" in roles.lower()
+    else:
+        return "sellers"
+    return "buyers" if (seller and not buyer) else "sellers"
+
+
+def _share_card_html(st, viewing_as=False, share_err=False):
+    """The sharing card beside "Your status" on Profile. The switch is a submit
+    button posting the existing action=standing_share form to this desk route
+    (no key in the page). Disabled when an admin is viewing as the client
+    (consent must come from the client) or when standing_json says
+    sharing_locked."""
+    aud = _share_audience(st)
     on = st.get("share_with_sellers") is True
-    dis = " disabled" if viewing_as else ""
+    locked = st.get("sharing_locked") is True
+    disabled = viewing_as or locked
+    subtitle = ("Buyers move faster with sellers whose onboarding is already in place."
+                if aud == "sellers" else
+                "Sellers prioritize buyers whose onboarding is already in place.")
     note = ""
     if viewing_as:
-        note = '<span class="share-note">Only the client can change this.</span>'
+        note = '<p class="sc-note">Only the client can change this.</p>'
+    elif locked:
+        note = '<p class="sc-note">Sharing is turned off for your account.</p>'
     elif share_err:
-        note = '<span class="share-note share-err">Couldn&rsquo;t save &mdash; please try again.</span>'
+        note = '<p class="sc-note sc-err">Couldn&rsquo;t save &mdash; please try again.</p>'
+    seen = ""
+    for it in (st.get("items") or []):
+        if not isinstance(it, dict) or not it.get("done"):
+            continue
+        label = str(it.get("label") or "")
+        if not label or label.startswith(_SHARE_PREVIEW_SKIP):
+            continue
+        seen += f'<li>{_CTS_TICK}<span>{html.escape(label)}</span></li>'
+    if not seen:
+        seen = '<li class="sc-none">Nothing yet &mdash; completed items will appear here.</li>'
+    state = "Sharing on" if on else "Sharing off"
     return (
-        '<form class="share" method="POST" action="?view=profile">'
+        '<div class="sc">'
+        f'<h2 class="sc-title">Increase your chances of closing by sharing with matched {aud}</h2>'
+        f'<p class="sc-sub">{html.escape(subtitle)}</p>'
+        '<form class="sc-form" method="POST" action="?view=profile">'
         '<input type="hidden" name="action" value="standing_share">'
-        '<label class="share-row"><input type="checkbox" name="share" value="1"'
-        f'{" checked" if on else ""}{dis} onchange="this.form.submit()"> '
-        f'<span>{html.escape(_SHARE_LABEL)}</span></label>'
-        f'<p class="share-help">{html.escape(_SHARE_HELP)}</p>'
-        + note
-        + ('' if viewing_as else '<noscript><button type="submit">Save</button></noscript>')
-        + '</form>'
+        f'<input type="hidden" name="share" value="{"0" if on else "1"}">'
+        f'<button type="submit" class="sc-switch-row" role="switch" aria-checked="{"true" if on else "false"}"'
+        f' aria-label="Share my standing with matched {aud}"{" disabled" if disabled else ""}>'
+        f'<span class="sc-track{" on" if on else ""}" aria-hidden="true"><span class="sc-knob"></span></span>'
+        f'<span class="sc-state">{state}</span></button>'
+        '</form>'
+        + note +
+        f'<div class="sc-seen"><div class="sc-seen-h">What matched {aud} see</div>'
+        f'<ul>{seen}</ul></div>'
+        f'<p class="sc-fine">Shown only to {aud} matched with you or introduced to you. Never published, '
+        'and never includes your trades, amounts, tier or referrals. You can turn this off at any time.</p>'
+        '</div>'
     )
 
 
@@ -1869,19 +1912,48 @@ _STATUS_CARD_CSS = """
   .cts.ys .note a { color: inherit; }
   .cts.ys .foot { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
   .cts.ys, .cts.ys * { overflow-wrap: anywhere; }
-  .cts.ys .share { border-top: 1px solid var(--rule); padding-top: 12px; display: flex; flex-direction: column; gap: 6px; }
-  .cts.ys .share-row { display: flex; align-items: flex-start; gap: 8px; font-weight: 500; cursor: pointer; }
-  .cts.ys .share-row input { margin-top: 4px; }
-  .cts.ys .share-help { font-size: 13px; color: var(--muted); margin: 0; }
-  .cts.ys .share-note { font-size: 13px; color: var(--muted); }
-  .cts.ys .share-err { color: #b23b3b; }
+  /* Profile: two columns (status 58% / sharing 42%), stacked under 760px. */
+  .pf-grid { display: grid; grid-template-columns: minmax(0, 58fr) minmax(0, 42fr); gap: 24px;
+             align-items: start; max-width: 1040px; }
+  @media (max-width: 760px) { .pf-grid { grid-template-columns: 1fr; } }
+  .pf-grid .cts, .pf-grid .cts.ys { margin: 0; }
+  .cts .sc { background: #fff; border: 1px solid var(--rule); border-radius: 12px; padding: 24px;
+             box-shadow: 0 1px 2px rgba(20,30,45,.05), 0 4px 14px rgba(20,30,45,.06);
+             display: flex; flex-direction: column; gap: 14px; }
+  .cts .sc-title { font-family: var(--serif); font-size: 20px; font-weight: 600; line-height: 1.3; margin: 0; }
+  .cts .sc-sub { color: var(--muted); font-size: 14px; }
+  .cts .sc-form { margin: 0; }
+  .cts .sc-switch-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 6px 0;
+                        background: none; border: 0; font: inherit; color: var(--ink); cursor: pointer; text-align: left; }
+  .cts .sc-switch-row:disabled { cursor: not-allowed; opacity: .6; }
+  .cts .sc-switch-row:focus-visible { outline: 2px solid var(--navy); outline-offset: 3px; border-radius: 6px; }
+  .cts .sc-track { position: relative; flex: none; width: 44px; height: 24px; border-radius: 999px;
+                   background: #c4cad1; transition: background .15s; }
+  .cts .sc-track.on { background: #1f7a4d; }
+  .cts .sc-knob { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+                  background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: left .15s; }
+  .cts .sc-track.on .sc-knob { left: 23px; }
+  .cts .sc-state { font-weight: 600; font-size: 15px; }
+  .cts .sc-note { font-size: 13px; color: var(--muted); }
+  .cts .sc-err { color: #b23b3b; }
+  .cts .sc-seen { background: var(--tint); border-radius: 8px; padding: 14px 16px; }
+  .cts .sc-seen-h { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+                    color: var(--muted); margin-bottom: 8px; }
+  .cts .sc-seen ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .cts .sc-seen li { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; }
+  .cts .sc-seen li .mark { flex: none; width: 16px; height: 16px; margin-top: 3px; }
+  .cts .sc-seen li .mark.on svg { width: 10px; height: 10px; }
+  .cts .sc-seen li.sc-none { color: var(--muted); }
+  .cts .sc-fine { font-size: 13px; color: var(--muted); }
+  @media (max-width: 480px) { .cts .sc { padding: 18px; } }
   @media (max-width: 480px) { .cts.ys .status { padding: 14px; } }
 """
 
 
 def _render_status_card(person_id, viewing_as=False, share_err=False):
-    """The "Your status" card HTML (with the sellers-sharing toggle below the
-    items), or "" when there's nothing to show. Never raises."""
+    """Profile's two cards: the "Your status" checklist (left) and the sharing
+    card (right, _share_card_html) in a two-column grid, or "" when there's
+    nothing to show. Never raises."""
     try:
         st = _fetch_status_card_standing(person_id)
         if not st:
@@ -1915,15 +1987,17 @@ def _render_status_card(person_id, viewing_as=False, share_err=False):
             '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:'
             'opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">'
             f'<style>{_CTS_CSS}{_STATUS_CARD_CSS}</style>'
+            '<div class="pf-grid">'
             '<div class="cts ys"><div class="status">'
             f'<div class="status-head"><span class="who">Your status</span>{pill}</div>'
             + (f'<ul class="checks">{lis}</ul>' if lis else "")
-            + _share_toggle_html(st, viewing_as, share_err)
             + '<div class="foot">'
             + (f'<p><a href="{tiers_href}" target="_blank" rel="noopener">How tiers work &rarr;</a></p>'
                if tiers_href else "")
             + "<p>See something that looks wrong? Reply to any of my emails and I'll correct it.</p>"
             '</div></div></div>'
+            f'<div class="cts">{_share_card_html(st, viewing_as, share_err)}</div>'
+            '</div>'
         )
     except Exception as e:
         print(f"standing fetch failed: render error {type(e).__name__}: {e}")
@@ -2035,7 +2109,9 @@ def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist"
     # legacy topnav, since the unified nav above already has its own brand link
     # and Indications tab; every other caller (admin views, send-a-link) keeps
     # the legacy topnav exactly as before, unchanged.
-    if view in ("watchlist_status", "watchlist", "holdings", "auction", "auction_list", "demand", "profile"):
+    if view == "profile":
+        topnav = ""          # Profile: unified nav only, no desk sub-nav pills
+    elif view in ("watchlist_status", "watchlist", "holdings", "auction", "auction_list", "demand"):
         topnav = _render_desk_subnav(view, is_admin)
     else:
         topnav = TOPNAV_ADMIN_HTML if is_admin else TOPNAV_HTML
@@ -2437,7 +2513,7 @@ def html_response(body_html, status=200, eyebrow="Private Secondaries Watchlist"
   <div class="card">
     {unified_nav_html}
     {topnav}
-    <div class="logo">{html.escape(eyebrow)}</div>
+    {"" if view == "profile" else f'<div class="logo">{html.escape(eyebrow)}</div>'}
     {body_html}
     {DISCLOSURE_HTML}
   </div>
