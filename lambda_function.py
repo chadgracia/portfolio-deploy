@@ -1834,7 +1834,10 @@ def _post_standing_share(person_id, share):
 
 
 # Rows of standing_json that are never shown to a counterparty (and so are
-# left out of the "What matched ... see" preview): the referral and trades rows.
+# left out of the "What matched ... see" preview): the referral and trades rows,
+# plus qualification for seller-only clients. Matched on the row's "key";
+# rows without one fall back to the label prefixes.
+_SHARE_PREVIEW_SKIP_KEYS = ("referral", "trades")
 _SHARE_PREVIEW_SKIP = ("Completed trades", "Introduced a new client")
 
 
@@ -1863,7 +1866,7 @@ def _share_card_html(st, viewing_as=False, share_err=False):
     locked = st.get("sharing_locked") is True
     disabled = viewing_as or locked
     subtitle = ("Buyers move faster with sellers whose onboarding is already in place."
-                if aud == "sellers" else
+                if aud == "buyers" else
                 "Sellers prioritize buyers whose onboarding is already in place.")
     note = ""
     if viewing_as:
@@ -1872,12 +1875,19 @@ def _share_card_html(st, viewing_as=False, share_err=False):
         note = '<p class="sc-note">Sharing is turned off for your account.</p>'
     elif share_err:
         note = '<p class="sc-note sc-err">Couldn&rsquo;t save &mdash; please try again.</p>'
+    skip_keys = _SHARE_PREVIEW_SKIP_KEYS + (("qualification",) if aud == "buyers" else ())
     seen = ""
     for it in (st.get("items") or []):
         if not isinstance(it, dict) or not it.get("done"):
             continue
         label = str(it.get("label") or "")
-        if not label or label.startswith(_SHARE_PREVIEW_SKIP):
+        if not label:
+            continue
+        key = it.get("key")
+        if key:
+            if str(key) in skip_keys:
+                continue
+        elif label.startswith(_SHARE_PREVIEW_SKIP):
             continue
         seen += f'<li>{_CTS_TICK}<span>{html.escape(label)}</span></li>'
     if not seen:
