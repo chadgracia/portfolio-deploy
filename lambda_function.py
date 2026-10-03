@@ -1834,6 +1834,182 @@ def _post_standing_share(person_id, share, actor="client"):
     return parsed
 
 
+# ── Admin standing editor (Profile, admin ?as= view only) ──────────────────────
+# Server-side calls to syndicate-dash's admin-key standing_client endpoint; the
+# key lives only in SYNDICATE_DASH_URL and never reaches the page.
+_ADMIN_OVERRIDE_ITEMS = (("qualification", "Investor qualification (IQF)"),
+                         ("id_forms", "Identity and compliance forms (CEF)"))
+_ADMIN_OVERRIDE_NOTE_DEFAULT = "Please resubmit \u2014 an update is needed"
+
+
+def _fetch_standing_admin(person_id):
+    """{standing, admin} for the admin panel, or None on any failure. Never cached."""
+    pid = str(person_id or "").strip()
+    if not pid or not SYNDICATE_DASH_URL:
+        return None
+    try:
+        req = urllib.request.Request(SYNDICATE_DASH_URL + "&view=standing_client&pid="
+                                     + urllib.parse.quote(pid, safe=""))
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            parsed = json.loads(resp.read().decode())
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("admin"), dict):
+            raise ValueError("unexpected response")
+        return parsed
+    except Exception as e:
+        print(f"standing admin fetch failed: {type(e).__name__}: {e}")
+        return None
+
+
+def _save_standing_admin(person_id, rev, fields):
+    """POST syndicate-dash ?action=standing_client. Returns (payload, None) on
+    success -- reseeding the 5-minute status-card cache from the returned
+    desk JSON -- or (None, error text) on failure."""
+    pid = str(person_id or "").strip()
+    if not pid or not SYNDICATE_DASH_URL:
+        return None, "Saving isn't configured."
+    try:
+        req = urllib.request.Request(
+            SYNDICATE_DASH_URL + "&action=standing_client",
+            data=json.dumps({"pid": pid, "rev": rev, "fields": fields}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            parsed = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read().decode()).get("error") or ""
+        except Exception:
+            msg = ""
+        print(f"standing admin save failed: HTTP {e.code} {msg}")
+        return None, (msg or f"Save failed (HTTP {e.code}).")
+    except Exception as e:
+        print(f"standing admin save failed: {type(e).__name__}: {e}")
+        return None, "Save failed. Nothing was saved."
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("standing"), dict):
+        return None, "Save failed. Nothing was saved."
+    st = parsed["standing"]
+    _status_card_cache[pid] = (time.monotonic(), st if st.get("visible") is True else None)
+    return parsed, None
+
+
+def _admin_fields_from_form(form):
+    """The standing_client "fields" object from the admin panel's form POST."""
+    def _num(name):
+        try:
+            return int(str(form.get(name, "0")).strip() or "0")
+        except ValueError:
+            return form.get(name)          # let syndicate-dash reject it (400)
+    floor = (form.get("tier_floor") or "").strip()
+    fields = {"hidden": form.get("hidden") == "1",
+              "terms_repair": _num("terms_repair"), "payments_repair": _num("payments_repair"),
+              "respond_repair": _num("respond_repair"),
+              "tier_floor": floor or None, "notes": form.get("notes", "")}
+    for k, _label in _ADMIN_OVERRIDE_ITEMS:
+        fields[f"{k}_override"] = "needs_update" if form.get(f"{k}_override") == "needs_update" else None
+        fields[f"{k}_override_note"] = form.get(f"{k}_override_note", "")
+        fields[f"{k}_override_reason"] = form.get(f"{k}_override_reason", "")
+    return fields
+
+
+def _admin_panel_html(person_id, data, saved=False, err=""):
+    """Admin-only standing editor under the Profile cards. Rendered only for an
+    admin session viewing a client with ?as= (the caller gates it)."""
+    pid = str(person_id)
+    links = []
+    if SYNDICATE_DASH_URL:
+        cs_href = html.escape(SYNDICATE_DASH_URL + "&view=standing&pid=" + urllib.parse.quote(pid, safe=""), quote=True)
+        links.append(f'<a href="{cs_href}" target="_blank" rel="noopener">Open in Client Standing &rarr;</a>')
+    links.append(f'<a href="https://app.pipelinecrm.com/people/{urllib.parse.quote(pid, safe="")}" '
+                 'target="_blank" rel="noopener">Pipeline record &rarr;</a>')
+    head = ('<div class="ap-head"><h2 class="ap-title">Admin</h2>'
+            f'<div class="ap-links">{" ".join(links)}</div></div>'
+            '<p class="ap-note">Admin only &mdash; the client never sees this panel.</p>')
+    if not data:
+        return (f'<div class="ap">{head}<p class="ap-err">Couldn&rsquo;t load this client&rsquo;s standing '
+                'settings. Reload to try again.</p></div>')
+    a = data["admin"]
+    rmax = a.get("repair_max") if isinstance(a.get("repair_max"), int) else 6
+
+    def num(name, label):
+        v = a.get(name) if isinstance(a.get(name), int) else 0
+        return (f'<label class="ap-field"><span>{html.escape(label)}</span>'
+                f'<input type="number" name="{name}" min="0" max="{rmax}" step="1" value="{v}"></label>')
+    floor = a.get("tier_floor") or ""
+    floor_opts = "".join(
+        f'<option value="{v}"{" selected" if floor == v else ""}>{lbl}</option>'
+        for v, lbl in (("", "None"), ("preferred", "Preferred"), ("gold", "Gold"), ("platinum", "Platinum")))
+    ov_html = ""
+    for k, label in _ADMIN_OVERRIDE_ITEMS:
+        on = a.get(f"{k}_override") == "needs_update"
+        note = a.get(f"{k}_override_note") or _ADMIN_OVERRIDE_NOTE_DEFAULT
+        reason = a.get(f"{k}_override_reason") or ""
+        ov_html += (
+            f'<div class="ap-ov"><label class="ap-field"><span>{html.escape(label)}</span>'
+            f'<select name="{k}_override" data-ov="{k}">'
+            f'<option value=""{"" if on else " selected"}>Use Pipeline</option>'
+            f'<option value="needs_update"{" selected" if on else ""}>Needs update</option></select></label>'
+            f'<div class="ap-ov-extra" data-ov-extra="{k}"{"" if on else " hidden"}>'
+            f'<label class="ap-field"><span>Note to client</span><input type="text" name="{k}_override_note" '
+            f'maxlength="500" value="{html.escape(note, quote=True)}"></label>'
+            f'<label class="ap-field"><span>Private reason</span><input type="text" name="{k}_override_reason" '
+            f'maxlength="500" value="{html.escape(reason, quote=True)}"></label></div></div>')
+    status = ""
+    if err:
+        status = f'<span class="ap-err">{html.escape(err)}</span>'
+    elif saved:
+        status = '<span class="ap-ok">Saved</span>'
+    return (
+        f'<div class="ap">{head}'
+        '<form method="POST" action="?view=profile" class="ap-form">'
+        '<input type="hidden" name="action" value="standing_admin_save">'
+        f'<input type="hidden" name="rev" value="{int(a.get("rev") or 0)}">'
+        '<label class="ap-check"><input type="checkbox" name="hidden" value="1"'
+        f'{" checked" if a.get("hidden") else ""}> Hidden everywhere</label>'
+        '<div class="ap-grid">'
+        + num("terms_repair", "Honors terms \u2014 next N trades")
+        + num("payments_repair", "Meets payment deadlines \u2014 next N trades")
+        + num("respond_repair", "Responds promptly \u2014 next N intros")
+        + f'<label class="ap-field"><span>Tier floor</span><select name="tier_floor">{floor_opts}</select></label>'
+        '</div>'
+        + ov_html +
+        '<label class="ap-field"><span>Notes</span><textarea name="notes" rows="3" maxlength="2000">'
+        f'{html.escape(a.get("notes") or "")}</textarea></label>'
+        f'<div class="ap-actions"><button type="submit" class="ap-save">Save</button>{status}</div>'
+        '</form>'
+        '<script>document.querySelectorAll(".ap [data-ov]").forEach(function(s){'
+        'var x=document.querySelector(\'.ap [data-ov-extra="\'+s.getAttribute("data-ov")+\'"]\');'
+        's.addEventListener("change",function(){x.hidden=s.value!=="needs_update";});});</script>'
+        '</div>'
+    )
+
+
+_ADMIN_PANEL_CSS = """
+  .cts .ap { margin-top: 24px; max-width: 1040px; background: #fff; border: 1px solid var(--rule);
+             border-radius: 12px; padding: 22px 24px; box-shadow: 0 1px 2px rgba(20,30,45,.05), 0 4px 14px rgba(20,30,45,.06);
+             display: flex; flex-direction: column; gap: 14px; }
+  .cts .ap-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+  .cts .ap-title { font-family: var(--serif); font-size: 20px; font-weight: 600; margin: 0; }
+  .cts .ap-links { display: flex; gap: 16px; flex-wrap: wrap; font-size: 14px; }
+  .cts .ap-note { font-size: 13px; color: var(--muted); }
+  .cts .ap-form { display: flex; flex-direction: column; gap: 14px; }
+  .cts .ap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 16px; }
+  .cts .ap-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  .cts .ap-field input, .cts .ap-field select, .cts .ap-field textarea {
+      font: inherit; font-size: 14px; color: var(--ink); padding: 7px 9px; border: 1px solid #d6d6d2;
+      border-radius: 6px; background: #fff; box-sizing: border-box; width: 100%; }
+  .cts .ap-check { display: flex; align-items: center; justify-content: flex-start; gap: 8px; font-weight: 500;
+                   width: fit-content; }
+  .cts .ap-check input { width: auto; flex: none; margin: 0; padding: 0; }
+  .cts .ap-ov { border-top: 1px solid var(--rule); padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .cts .ap-ov-extra { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px 16px; }
+  .cts .ap-ov-extra[hidden] { display: none; }
+  .cts .ap-actions { display: flex; align-items: center; gap: 12px; }
+  .cts .ap-save { font: inherit; font-weight: 600; font-size: 14px; padding: 8px 18px; border-radius: 8px;
+                  border: 1px solid var(--ink); background: var(--ink); color: #fff; cursor: pointer; }
+  .cts .ap-ok { color: #1f7a4d; font-weight: 600; font-size: 14px; }
+  .cts .ap-err { color: #b23b3b; font-size: 14px; }
+"""
+
+
 # Rows of standing_json that are never shown to a counterparty (and so are
 # left out of the "What matched ... see" preview): the referral and trades rows,
 # plus qualification for seller-only clients. Matched on the row's "key";
@@ -6133,7 +6309,8 @@ def _safe_href(url):
     return ""
 
 
-def render_profile(client_id, is_admin, viewing_as=False, share_err=False):
+def render_profile(client_id, is_admin, viewing_as=False, share_err=False, admin_panel=False,
+                   admin_saved=False, admin_err=""):
     """Signed-in client's Profile: who they're signed in as plus the "Your
     status" card (_render_status_card, standing_json via the 5-minute cache)
     with the sellers-sharing toggle. Standing is never computed here; with no
@@ -6152,12 +6329,20 @@ def render_profile(client_id, is_admin, viewing_as=False, share_err=False):
         card = ('<p>Your client status will appear here soon. Questions? Email '
                 '<a href="mailto:cgracia@rainmakersecurities.com">cgracia@rainmakersecurities.com</a>.</p>')
 
+    # Admin standing editor: only for an admin session viewing a client via ?as=
+    # (the route decides admin_panel); a client session never gets it.
+    panel = ""
+    if admin_panel:
+        panel = (f"<style>{_ADMIN_PANEL_CSS}</style>"
+                 + _admin_panel_html(client_id, _fetch_standing_admin(client_id), admin_saved, admin_err))
+
     body = f"""
     <style>{_CTS_CSS}</style>
     <h1>Profile</h1>
     <div class="cts">
       <p class="who-line" style="margin-bottom:14px;">Signed in as {who}</p>
       {card}
+      {panel}
     </div>
     """
     return html_response(body, is_admin=is_admin, view="profile", client_id=client_id)
@@ -7520,6 +7705,21 @@ def _route(event, context):
         # their OWN person_id. An admin viewing as a client (?as= or a magic-link
         # session swap) changes the viewed client's, recorded by syndicate-dash
         # as an admin change made with the client's permission.
+        # Admin standing editor (Profile panel). Admin session viewing a client
+        # with ?as= only; anyone else is refused. Saved server-side through
+        # syndicate-dash's standing_client endpoint (key never in the page).
+        if action == "standing_admin_save":
+            if not (is_admin and qs.get("as")):
+                return {"statusCode": 403, "headers": {"Content-Type": "text/plain"}, "body": "forbidden"}
+            try:
+                _rev = int(form.get("rev") or "")
+            except ValueError:
+                _rev = None
+            _payload, _err = (_save_standing_admin(qs["as"], _rev, _admin_fields_from_form(form))
+                              if _rev is not None else (None, "Reload the page and try again."))
+            _dest = raw_path + "?view=profile" + ("&admin_saved=1" if _payload else
+                                                    "&admin_err=" + urllib.parse.quote(_err or "Save failed."))
+            return {"statusCode": 303, "headers": {"Location": _dest}, "body": ""}
         if action == "standing_share":
             if is_admin and not effective_admin:
                 _share_pid = qs["as"] if qs.get("as") else client_id
@@ -7948,7 +8148,10 @@ def _route(event, context):
         return render_demand_board(view_id, effective_admin)
     if qs.get("view") == "profile":
         return render_profile(view_id, effective_admin, viewing_as=(is_admin and not effective_admin),
-                              share_err=qs.get("share_err") == "1")
+                              share_err=qs.get("share_err") == "1",
+                              admin_panel=bool(is_admin and qs.get("as")),
+                              admin_saved=qs.get("admin_saved") == "1",
+                              admin_err=(qs.get("admin_err") or "")[:300] if (is_admin and qs.get("as")) else "")
     if qs.get("view") == "admin" and is_admin:
         return render_admin_hub()
     if qs.get("view") == "auctions" and is_admin:
