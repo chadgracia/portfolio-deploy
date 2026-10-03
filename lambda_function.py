@@ -1833,12 +1833,8 @@ def _post_standing_share(person_id, share):
     return parsed
 
 
-_SHARE_LABEL = "Share my standing with sellers I'm matched with"
-_SHARE_HELP = ("When your bid matches a seller's shares, that seller will see which of the items above "
-               "you've completed, shown as simple check marks. Sellers often prioritize buyers whose "
-               "onboarding is already in place. Your standing is never published or shown to anyone "
-               "else, and it never includes your trades, amounts, tier or referrals. You can turn this "
-               "off at any time.")
+_SHARE_LABEL = "Share my status with sellers I'm matched with or introduced to"
+_SHARE_HELP = "Sellers always see an anonymous rating; this shares your name with your badges."
 
 
 def _share_toggle_html(st, viewing_as=False, share_err=False):
