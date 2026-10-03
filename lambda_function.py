@@ -1914,6 +1914,41 @@ def _share_card_html(st, viewing_as=False, share_err=False):
     )
 
 
+def _tiers_card_html(st, tiers_href=""):
+    """Full-width "Commission tiers" card under the Profile grid: the three
+    COMMISSION_TIERS side by side (current standing_json "tier" tagged "Your
+    tier", the rest muted), one next-step line, and the "How tiers work" link."""
+    tier = str(st.get("tier") or "").strip().lower()
+    keys = [t[0] for t in COMMISSION_TIERS]
+    cols = ""
+    for key, name, pct, req, _incl in COMMISSION_TIERS:
+        cur = key == tier
+        tag = '<span class="tc-tag">Your tier</span>' if cur else ""
+        cols += (f'<div class="tc-tier{" cur" if cur else (" muted" if tier in keys else "")}">'
+                 f'<div class="tc-head"><span class="tc-name">{html.escape(name)}</span>{tag}</div>'
+                 f'<div class="tc-pct">{pct}% <small>off</small></div>'
+                 f'<p class="tc-req">{html.escape(req)}</p></div>')
+    trades_note = ""
+    for it in (st.get("items") or []):
+        if isinstance(it, dict) and it.get("key") == "trades":
+            trades_note = str(it.get("note") or "").strip()
+    if tier == keys[-1]:
+        nxt = "You&rsquo;re at our top tier."
+    elif tier in keys or st.get("good_standing") is True:
+        _k, name, pct, req, _i = COMMISSION_TIERS[keys.index(tier) + 1 if tier in keys else 0]
+        nxt = f"<b>Next: {html.escape(name)} ({pct}% off)</b> &mdash; {html.escape(req)}."
+        if tier in keys and trades_note:
+            nxt += f" You&rsquo;re at {html.escape(trades_note)}."
+    else:
+        nxt = "Complete the open items above to qualify."
+    link = (f'<p class="tc-link"><a href="{tiers_href}" target="_blank" rel="noopener">How tiers work &rarr;</a></p>'
+            if tiers_href else "")
+    return ('<div class="sc tc">'
+            '<h2 class="sc-title">Commission tiers</h2>'
+            f'<div class="tc-grid">{cols}</div>'
+            f'<p class="tc-next">{nxt}</p>{link}</div>')
+
+
 _STATUS_CARD_CSS = """
   .cts.ys { margin: 0 0 18px; }
   .cts.ys .status { padding: 18px; gap: 12px; }
@@ -1955,6 +1990,25 @@ _STATUS_CARD_CSS = """
   .cts .sc-seen li .mark.on svg { width: 10px; height: 10px; }
   .cts .sc-seen li.sc-none { color: var(--muted); }
   .cts .sc-fine { font-size: 13px; color: var(--muted); }
+  .pf-grid .pf-wide { grid-column: 1 / -1; }
+  .cts .tc-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  @media (max-width: 640px) { .cts .tc-grid { grid-template-columns: 1fr; } }
+  .cts .tc-tier { border: 1px solid var(--rule); border-radius: 8px; padding: 16px;
+                  display: flex; flex-direction: column; gap: 6px; }
+  .cts .tc-tier.cur { border: 2px solid var(--navy); background: var(--tint); padding: 15px; }
+  .cts .tc-tier.muted { color: var(--muted); }
+  .cts .tc-tier.muted .tc-pct { color: var(--muted); }
+  .cts .tc-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .cts .tc-name { font-family: var(--serif); font-size: 18px; font-weight: 600; }
+  .cts .tc-tag { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+                 color: #fff; background: var(--navy); border-radius: 999px; padding: 2px 9px; }
+  .cts .tc-pct { font-size: 22px; font-weight: 600; color: var(--navy); line-height: 1.15;
+                 font-variant-numeric: tabular-nums; }
+  .cts .tc-pct small { font-size: 12px; font-weight: 400; color: var(--muted); }
+  .cts .tc-req { font-size: 14px; }
+  .cts .tc-next { font-size: 14px; }
+  .cts .tc-next b { color: var(--navy); }
+  .cts .tc-link { font-size: 14px; }
   @media (max-width: 480px) { .cts .sc { padding: 18px; } }
   @media (max-width: 480px) { .cts.ys .status { padding: 14px; } }
 """
@@ -2002,11 +2056,10 @@ def _render_status_card(person_id, viewing_as=False, share_err=False):
             f'<div class="status-head"><span class="who">Your status</span>{pill}</div>'
             + (f'<ul class="checks">{lis}</ul>' if lis else "")
             + '<div class="foot">'
-            + (f'<p><a href="{tiers_href}" target="_blank" rel="noopener">How tiers work &rarr;</a></p>'
-               if tiers_href else "")
             + "<p>See something that looks wrong? Reply to any of my emails and I'll correct it.</p>"
             '</div></div></div>'
             f'<div class="cts">{_share_card_html(st, viewing_as, share_err)}</div>'
+            f'<div class="cts pf-wide">{_tiers_card_html(st, tiers_href)}</div>'
             '</div>'
         )
     except Exception as e:
@@ -7955,6 +8008,43 @@ def _viewing_as_bar(client_id):
             '<a href="?view=resume_admin">back to admin</a></div>')
 
 
+# The three commission tiers: one source for the ?view=commission-tiers page and
+# the Profile "Commission tiers" card, so the two can never disagree.
+# (key as in standing_json "tier", name, % off, requirement beyond good standing, includes)
+COMMISSION_TIERS = (
+    ("preferred", "Preferred", 10,
+     "Introduced another new accredited investor who completed onboarding with Rainmaker",
+     ("A 30-minute strategy call on your goals and how I can help",)),
+    ("gold", "Gold", 15,
+     "$5M or more in completed trades",
+     ("Early look at new blocks", "Strategy calls whenever you need them")),
+    ("platinum", "Platinum", 20,
+     "$10M or more in completed trades, or 3 or more trades",
+     ("Everything in Gold",
+      "When you ask me to find a specific position, I won't offer what I find to my other buyers for 30 days")),
+)
+
+
+def _commission_tiers_page_block():
+    """The page's three-tier grid, built from COMMISSION_TIERS."""
+    out = '        <div class="tiers">\n'
+    for _key, name, pct, req, incl in COMMISSION_TIERS:
+        out += ('          <div class="tier">\n'
+                f'            <div class="name">{name}</div>\n'
+                f'            <div class="pct">{pct}% <small>off</small></div>\n'
+                '            <div class="req">Requires</div>\n'
+                '            <ul>\n'
+                '              <li>Good standing</li>\n'
+                f'              <li>{req}</li>\n'
+                '            </ul>\n'
+                '            <div class="req">Includes</div>\n'
+                '            <ul>\n'
+                + "".join(f'              <li>{x}</li>\n' for x in incl) +
+                '            </ul>\n'
+                '          </div>\n')
+    return out + '        </div>'
+
+
 # Hidden static page at ?view=commission-tiers. Public (no cookie/token), not
 # linked from anywhere. Plain string, not an f-string: the CSS braces are literal.
 COMMISSION_TIERS_HTML = """<!DOCTYPE html>
@@ -8074,49 +8164,7 @@ tr.base td { font-weight: 600; }
       <section class="stack">
         <div class="eyebrow">Reductions from the original commission</div>
         <h2>Three tiers</h2>
-        <div class="tiers">
-          <div class="tier">
-            <div class="name">Preferred</div>
-            <div class="pct">10% <small>off</small></div>
-            <div class="req">Requires</div>
-            <ul>
-              <li>Good standing</li>
-              <li>Introduced another new accredited investor who completed onboarding with Rainmaker</li>
-            </ul>
-            <div class="req">Includes</div>
-            <ul>
-              <li>A 30-minute strategy call on your goals and how I can help</li>
-            </ul>
-          </div>
-          <div class="tier">
-            <div class="name">Gold</div>
-            <div class="pct">15% <small>off</small></div>
-            <div class="req">Requires</div>
-            <ul>
-              <li>Good standing</li>
-              <li>$5M or more in completed trades</li>
-            </ul>
-            <div class="req">Includes</div>
-            <ul>
-              <li>Early look at new blocks</li>
-              <li>Strategy calls whenever you need them</li>
-            </ul>
-          </div>
-          <div class="tier">
-            <div class="name">Platinum</div>
-            <div class="pct">20% <small>off</small></div>
-            <div class="req">Requires</div>
-            <ul>
-              <li>Good standing</li>
-              <li>$10M or more in completed trades, or 3 or more trades</li>
-            </ul>
-            <div class="req">Includes</div>
-            <ul>
-              <li>Everything in Gold</li>
-              <li>When you ask me to find a specific position, I won't offer what I find to my other buyers for 30 days</li>
-            </ul>
-          </div>
-        </div>
+__TIERS__
       </section>
     </div>
     <div class="foot"><span>Client Commission Tiers · September 2026</span><span>Page 1 of 2</span></div>
@@ -8198,7 +8246,7 @@ tr.base td { font-weight: 600; }
 </div>
 </body>
 </html>
-"""
+""".replace("__TIERS__", _commission_tiers_page_block())
 
 
 def lambda_handler(event, context):
