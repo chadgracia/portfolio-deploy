@@ -2011,7 +2011,7 @@ _ADMIN_PANEL_CSS = """
 
 
 # Rows of standing_json that are never shown to a counterparty (and so are
-# left out of the "What matched ... see" preview): the referral and trades rows,
+# left out of the "What introduced ... see" preview): the referral and trades rows,
 # plus qualification for seller-only clients. Matched on the row's "key";
 # rows without one fall back to the label prefixes.
 _SHARE_PREVIEW_SKIP_KEYS = ("referral", "trades")
@@ -2030,6 +2030,16 @@ def _share_audience(st):
     else:
         return "sellers"
     return "buyers" if (seller and not buyer) else "sellers"
+
+
+# Where a client's badges/standing are shown (Profile sharing card). The
+# qualification line applies to buyers only: QP / Accredited pills are what
+# sellers see on anonymous Buyer Demand tiles. Introduced counterparties see
+# the client's name and, with sharing on, their standing (star + checkmarks)
+# and the qualitative closer chip, hence "track record".
+SHARE_COPY_QUALIFICATION = ("Your qualification level (QP or Accredited) is shown anonymously to sellers "
+                            "so they can confirm you\u2019re eligible for their deal.")
+SHARE_COPY_NAMED = "Your name and track record are shared only with counterparties you\u2019re introduced to."
 
 
 def _share_card_html(st, viewing_as=False, share_err=False):
@@ -2073,22 +2083,23 @@ def _share_card_html(st, viewing_as=False, share_err=False):
     state = "Sharing on" if on else "Sharing off"
     return (
         '<div class="sc">'
-        f'<h2 class="sc-title">Increase your chances of closing by sharing with matched {aud}</h2>'
+        f'<h2 class="sc-title">Increase your chances of closing by sharing with the {aud} you&rsquo;re introduced to</h2>'
         f'<p class="sc-sub">{html.escape(subtitle)}</p>'
         '<form class="sc-form" method="POST" action="?view=profile">'
         '<input type="hidden" name="action" value="standing_share">'
         f'<input type="hidden" name="share" value="{"0" if on else "1"}">'
         f'<button type="submit" class="sc-switch-row" role="switch" aria-checked="{"true" if on else "false"}"'
-        f' aria-label="Share my standing with matched {aud}"{" disabled" if disabled else ""}>'
+        f' aria-label="Share my standing with {aud} I&rsquo;m introduced to"{" disabled" if disabled else ""}>'
         f'<span class="sc-track{" on" if on else ""}" aria-hidden="true"><span class="sc-knob"></span></span>'
         f'<span class="sc-state">{state}</span></button>'
         '</form>'
         + note +
-        f'<div class="sc-seen"><div class="sc-seen-h">What matched {aud} see</div>'
+        f'<div class="sc-seen"><div class="sc-seen-h">What introduced {aud} see</div>'
         f'<ul>{seen}</ul></div>'
-        f'<p class="sc-fine">If on: {aud} matched with you see your good-standing checkmarks without your name; '
-        f'{aud} you&rsquo;ve been introduced to see them under your name. No one else ever sees them. '
-        'Never published, and never includes your trades, amounts, tier or referrals. '
+        '<p class="sc-fine">'
+        + (f'{html.escape(SHARE_COPY_QUALIFICATION)} ' if aud == "sellers" else "")
+        + f'{html.escape(SHARE_COPY_NAMED)} '
+        'Never published, and never includes trade sizes, your tier or referrals. '
         'You can turn this off anytime.</p>'
         '</div>'
     )
