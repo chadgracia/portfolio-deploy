@@ -2032,13 +2032,10 @@ def _share_audience(st):
     return "buyers" if (seller and not buyer) else "sellers"
 
 
-# Where a client's badges/standing are shown (Profile sharing card). The
-# qualification line applies to buyers only: QP / Accredited pills are what
-# sellers see on anonymous Buyer Demand tiles. Introduced counterparties see
-# the client's name and, with sharing on, their standing (star + checkmarks)
-# and the qualitative closer chip, hence "track record".
-SHARE_COPY_QUALIFICATION = ("Your qualification level (QP or Accredited) is shown anonymously to sellers "
-                            "so they can confirm you\u2019re eligible for their deal.")
+# Where a client's standing is shown (Profile sharing card). Introduced
+# counterparties see the client's name and, with sharing on, their standing
+# (star + checkmarks) and the qualitative closer chip, hence "track record".
+# The card never describes what is or isn't visible before an introduction.
 SHARE_COPY_NAMED = "Your name and track record are shared only with counterparties you\u2019re introduced to."
 
 
@@ -2097,8 +2094,7 @@ def _share_card_html(st, viewing_as=False, share_err=False):
         f'<div class="sc-seen"><div class="sc-seen-h">What introduced {aud} see</div>'
         f'<ul>{seen}</ul></div>'
         '<p class="sc-fine">'
-        + (f'{html.escape(SHARE_COPY_QUALIFICATION)} ' if aud == "sellers" else "")
-        + f'{html.escape(SHARE_COPY_NAMED)} '
+        f'{html.escape(SHARE_COPY_NAMED)} '
         'Never published, and never includes trade sizes, your tier or referrals. '
         'You can turn this off anytime.</p>'
         '</div>'
@@ -8453,7 +8449,7 @@ __TIERS__
       <section class="fine">
         <p>An introduced investor counts once they complete onboarding with Rainmaker and are verified as accredited or higher. Introductions of household members, related entities or colleagues at the same firm don't count.</p>
         <p>Each deal's commission is set in Rainmaker's agreement with the seller and is usually built into the purchase price. Reductions apply only to Rainmaker commissions on trades handled by Chad Gracia and are confirmed in writing with the seller through a revised commission schedule or side letter, which lowers the price you pay without changing the seller's proceeds. They do not apply to trades with other Rainmaker representatives.</p>
-        <p>Before or after introducing you to a seller, I may mention which good-standing items you've completed and whether you've completed trades with me, as sellers often ask about these when deciding on allocations. I never share trade sizes, referral information or anything else about your account.</p>
+        <p>Before or after introducing you to a seller, I may mention which good-standing items you've completed and whether you've completed trades with me, as sellers often ask about these when deciding on allocations. I never share trade sizes or referral information.</p>
       </section>
 
       <section class="disc">

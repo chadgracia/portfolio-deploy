@@ -8,7 +8,7 @@ import os
 import sys
 
 SRC = os.path.join(os.path.dirname(__file__), "..", "lambda_function.py")
-NEEDED = {"_CTS_TICK", "_SHARE_PREVIEW_SKIP_KEYS", "_SHARE_PREVIEW_SKIP", "SHARE_COPY_QUALIFICATION",
+NEEDED = {"_CTS_TICK", "_SHARE_PREVIEW_SKIP_KEYS", "_SHARE_PREVIEW_SKIP",
           "SHARE_COPY_NAMED", "_share_audience", "_share_card_html"}
 
 tree = ast.parse(open(SRC).read())
@@ -30,20 +30,25 @@ def check(name, cond):
     failures += 0 if cond else 1
 
 
-QUAL = ("Your qualification level (QP or Accredited) is shown anonymously to sellers "
-        "so they can confirm you’re eligible for their deal.")
-NAMED = "Your name and track record are shared only with counterparties you’re introduced to."
-check("copy constants match the agreed wording",
-      ns["SHARE_COPY_QUALIFICATION"] == QUAL and ns["SHARE_COPY_NAMED"] == NAMED)
+NAMED = "Your name and track record are shared only with counterparties you\u2019re introduced to."
+check("copy constant matches the agreed wording", ns["SHARE_COPY_NAMED"] == NAMED)
+check("no qualification-visibility constant left", "SHARE_COPY_QUALIFICATION" not in open(SRC).read())
 
 buyer = ns["_share_card_html"]({"roles": {"buyer": True, "seller": False}, "items": []})
 seller = ns["_share_card_html"]({"roles": {"buyer": False, "seller": True}, "items": []})
-check("buyer card: both lines (qualification shown anonymously; name + track record only to introduced)",
-      html.escape(QUAL) in buyer and html.escape(NAMED) in buyer)
-check("seller-only card: only the name/track-record line (no qualification pill is shown to buyers)",
-      html.escape(QUAL) not in seller and html.escape(NAMED) in seller)
-for label, card in (("buyer", buyer), ("seller-only", seller)):
-    check(f"{label} card: no 'matched' wording left (title, aria-label, preview heading, fine print)",
-          "matched" not in card.lower() and "without your name" not in card and "introduced to" in card)
+on = ns["_share_card_html"]({"roles": {"buyer": True}, "share_with_sellers": True,
+                             "items": [{"key": "terms", "label": "Honors agreed terms", "done": True}]})
+FORBIDDEN = ("qp", "accredited", "qualification level", "shown anonymously", "anonymous", "no one else",
+             "nothing is shown", "nothing else", "not visible", "never sees", "matched", "without your name")
+for label, card in (("buyer", buyer), ("seller-only", seller), ("sharing on", on)):
+    low = card.lower()
+    check(f"{label} card: carries the name/track-record line", html.escape(NAMED) in card)
+    check(f"{label} card: no QP/Accredited visibility copy and nothing implying zero visibility before introduction",
+          not any(t in low for t in FORBIDDEN))
+
+src_text = open(SRC).read()
+check("Commission Tiers page: no 'anything else about your account' (would imply nothing else is visible)",
+      "anything else about your account" not in src_text
+      and "I never share trade sizes or referral information." in src_text)
 
 sys.exit(1 if failures else 0)
