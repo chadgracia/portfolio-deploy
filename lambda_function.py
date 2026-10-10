@@ -3600,6 +3600,9 @@ ADMIN_ALERTS_URL = ("https://3m3tx5bqrdvddzsyjitnjiipjy0hftoe.lambda-url.us-east
                     + _ADMIN_KEY_QS) if ADMIN_KEY else ""
 SYNDICATE_DASH_URL = ("https://ws4stw4iul75a7yx5dra2wmnq40kipav.lambda-url.us-east-1.on.aws/"
                       + _ADMIN_KEY_QS) if ADMIN_KEY else ""
+WHATSAPP_ADMIN_KEY = os.environ.get("WHATSAPP_ADMIN_KEY", "")
+WHATSAPP_CAPTURE_URL = ("https://scrqjg5mbppzctgagxbslh7yve0fbzyp.lambda-url.us-east-1.on.aws/?key="
+                        + urllib.parse.quote(WHATSAPP_ADMIN_KEY, safe="")) if WHATSAPP_ADMIN_KEY else None
 # Client-facing dashboard entry; the nav appends a signed &sso= handoff.
 CLIENT_DASH_URL = "https://desk.graciagroup.com/dashboard/?tab=overview"
 DEALS_KEY = "deals.json"
@@ -3700,6 +3703,9 @@ def render_admin_hub():
         ("Engagement Docs", "Sell-side agreement and Schedule A, prefilled from a deal "
                             "or person. Preview only for now.",
          "?view=engagement"),
+        ("WhatsApp capture", "Sort new WhatsApp contacts as Client or Personal, and send "
+                             "today's Client messages to the compliance inbox.",
+         WHATSAPP_CAPTURE_URL),
     ]
     # Every tool opens in its own tab, so the hub stays put behind them.
     cards = ""
