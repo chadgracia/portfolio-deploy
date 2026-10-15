@@ -3624,150 +3624,220 @@ def _deal_cf_option_ids(deal, field):
     return out
 
 
-def _deal_linked_person_ids(deal):
-    people = deal.get("people")
-    if isinstance(people, list):
-        return [p.get("id") for p in people if isinstance(p, dict) and p.get("id") is not None]
-    return [pid for pid in (deal.get("person_ids") or []) if pid is not None]
+def _blockbook_tenants():
+    """Blockbook's live tenants for the admin hub's Blockbook card, read from
+    syndicate-dash's own admin-gated ?tenants=list route (its _eligible_tenants_list:
+    the population its nav picker and access checks use), so the admin hub can never
+    disagree with Blockbook about who is a tenant. Rows are
+    {"full_name", "company_name", "email"}; a missing name is filled from
+    _people_index() by email, else left empty (the row then shows the email alone).
+    Sorted by company, then name. Fetched per render, never cached, and separate from
+    _syndicate_eligible_emails (the nav's own cached copy). Returns None on any
+    fetch/parse error or an empty list -- the card then shows its disabled state."""
+    if not SYNDICATE_DASH_URL:
+        return None
+    try:
+        req = urllib.request.Request(SYNDICATE_DASH_URL + "&tenants=list")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+        tenants = data.get("tenants") or []
+    except Exception as e:
+        print(f"Admin hub: Blockbook tenants fetch failed (non-fatal): {type(e).__name__}: {e}")
+        return None
+    try:
+        idx = _people_index()
+        by_email, by_id = idx.get("by_email", {}) or {}, idx.get("by_id", {}) or {}
+    except Exception:
+        by_email, by_id = {}, {}
+    rows = []
+    for t in tenants:
+        if not isinstance(t, dict):
+            continue
+        email = (t.get("email") or "").strip()
+        if not email:
+            continue
+        name = (t.get("name") or "").strip()
+        if not name:
+            rec = by_id.get(by_email.get(email.lower(), "")) or {}
+            name = (rec.get("name") or rec.get("first_name") or "").strip()
+        rows.append({"full_name": name, "email": email,
+                     "company_name": (t.get("firm") or t.get("company_name") or "").strip()})
+    if not rows:
+        return None
+    rows.sort(key=lambda r: (r["company_name"].lower(), (r["full_name"] or r["email"]).lower()))
+    return rows
 
 
-def syndicator_eligible_sellers():
-    """Sellers eligible for the Syndicator Dashboard: any person linked to a
-    Sell Order deal (custom_label_1958 contains 5011675). Reads deals.json
-    fresh from the shared CRM snapshot (short timeout, fail-closed -- an
-    empty list on any error, same convention as _people_index()) and looks
-    up each linked person's name/email via the existing people_index.json
-    (never the raw 113 MB people.json -- see _people_index's own docstring
-    on why that file is never loaded directly here). company_name comes
-    from the deal's own "company" object, matching Pipeline's own linkage.
-    Missing/unresolvable fields are skipped silently, per spec."""
-    try:
-        cfg = BotoConfig(connect_timeout=5, read_timeout=5, retries={"max_attempts": 1})
-        s3 = boto3.client("s3", config=cfg)
-        obj = s3.get_object(Bucket=COMPANIES_BUCKET, Key=DEALS_KEY)
-        deals = json.loads(obj["Body"].read()).get("deals", [])
-    except Exception:
-        return []
-    try:
-        idx = _people_index().get("by_id", {})
-    except Exception:
-        idx = {}
-    out = {}
-    for deal in deals:
-        if SELL_ORDER_OPTION_ID not in _deal_cf_option_ids(deal, SELL_ORDER_FIELD):
+# Blockbook card search: live filter on name/company/email; Enter opens the first
+# visible row's My Deals link in a new tab. Plain string, not an f-string.
+BLOCKBOOK_SEARCH_SCRIPT = """<script>
+(function () {
+  var box = document.getElementById("bb-search");
+  if (!box) return;
+  var rows = Array.prototype.slice.call(document.querySelectorAll(".syn-list .syn-row"));
+  box.addEventListener("input", function () {
+    var q = box.value.trim().toLowerCase();
+    rows.forEach(function (r) {
+      r.style.display = (!q || r.getAttribute("data-q").indexOf(q) !== -1) ? "" : "none";
+    });
+  });
+  box.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].style.display === "none") continue;
+      var a = rows[i].querySelector("a.syn-deals");
+      if (a) window.open(a.href, "_blank", "noopener");
+      return;
+    }
+  });
+})();
+</script>"""
+
+
+def _blockbook_card_html():
+    """The full-width Blockbook card at the top of the admin hub."""
+    if not SYNDICATE_DASH_URL:  # keyed card shown disabled when ADMIN_KEY is unset
+        return ('<div class="hub-card hub-card-off syn-card">'
+                '<div class="hub-title">Blockbook</div></div>')
+    tenants = _blockbook_tenants()
+    head = (
+        '<div class="syn-head"><span class="hub-title">Blockbook</span>'
+        f'<a class="syn-admin" href="{html.escape(SYNDICATE_DASH_URL, quote=True)}"'
+        ' target="_blank" rel="noopener">Open admin view</a>'
+        + (f'<span class="syn-count">{len(tenants)} sellers</span>' if tenants else '')
+        + '</div>'
+    )
+    if not tenants:
+        return ('<div class="hub-card syn-card">' + head +
+                '<input id="bb-search" class="syn-search" type="search" disabled'
+                ' placeholder="Search sellers">'
+                '<p class="syn-unavail">Tenant list unavailable</p></div>')
+    seller_rows = ""
+    for r in tenants:
+        my_deals_href = f"{SYNDICATE_DASH_URL}&view_as={urllib.parse.quote(r['email'])}"
+        intros_href = my_deals_href + "&tab=intros"
+        q = " ".join((r["full_name"], r["company_name"], r["email"])).lower()
+        label = (f'<span class="syn-name">{html.escape(r["full_name"])}</span>'
+                 + (f' &middot; <span class="syn-co">{html.escape(r["company_name"])}</span>'
+                    if r["company_name"] else '')
+                 if r["full_name"] else
+                 f'<span class="syn-name">{html.escape(r["email"])}</span>')
+        seller_rows += (
+            f'<li class="syn-row" data-q="{html.escape(q, quote=True)}">{label}'
+            f' &middot; <a class="syn-deals" href="{html.escape(my_deals_href, quote=True)}" target="_blank" rel="noopener">My Deals</a>'
+            f' &middot; <a href="{html.escape(intros_href, quote=True)}" target="_blank" rel="noopener">Intros</a>'
+            '</li>'
+        )
+    return ('<div class="hub-card syn-card">' + head +
+            '<input id="bb-search" class="syn-search" type="search" autocomplete="off"'
+            ' placeholder="Search sellers by name, company or email">'
+            f'<ul class="syn-list">{seller_rows}</ul></div>' + BLOCKBOOK_SEARCH_SCRIPT)
+
+
+def _hub_cards_html(tiles, extra_class=""):
+    # Every tool opens in its own tab, so the hub stays put behind them.
+    cls = "hub-card" + (" " + extra_class if extra_class else "")
+    cards = ""
+    for title, desc, href in tiles:
+        if href is None:  # keyed card shown disabled when ADMIN_KEY is unset
+            cards += (f'<div class="{cls} hub-card-off">'
+                      f'<div class="hub-title">{html.escape(title)}</div>'
+                      f'<div class="hub-desc">{html.escape(desc)}</div></div>')
             continue
-        company_name = ((deal.get("company") or {}).get("name") or "").strip()
-        if not company_name:
+        if not href:  # keyed link omitted when ADMIN_KEY is unset
             continue
-        for pid in _deal_linked_person_ids(deal):
-            if pid in out:
-                continue
-            rec = idx.get(str(pid))
-            if not rec:
-                continue
-            full_name = (rec.get("name") or "").strip()
-            email = (rec.get("email") or "").strip()
-            if not full_name or not email:
-                continue
-            out[pid] = {"full_name": full_name, "company_name": company_name, "email": email}
-    return sorted(out.values(), key=lambda r: r["company_name"].lower())
+        cards += (f'<a class="{cls}" href="{html.escape(href, quote=True)}"'
+                  f' target="_blank" rel="noopener">'
+                  f'<div class="hub-title">{html.escape(title)}</div>'
+                  f'<div class="hub-desc">{html.escape(desc)}</div></a>')
+    return cards
 
 
 def render_admin_hub():
-    """Admin-only index of every internal tool."""
-    tiles = [
+    """Admin-only index of every internal tool, in labelled sections."""
+    daily = [
         ("Daily brief", "Your queue: invoices, closes, crossed trades, warm leads.",
          ADMIN_BRIEF_URL),
-        ("Weekly mailer recipients", "First name and email for the SharePoint flow.",
-         ADMIN_MAILER_URL),
-        ("Third-party pricing", "Update Hiive bid, ask and mark for tracked names.",
-         ADMIN_PRICING_URL),
-        ("Auctions", "Create an auction, view the order book, invite buyers.",
-         "?view=auctions"),
-        ("Send a link", "Sign-in links for clients, update and LOI links for deals, "
-                        "bid and offer links for companies.",
-         "?view=sendlink"),
-        ("All portfolios", "Every client's holdings in one roll-up.",
-         "?view=portfolios"),
-        # None (not "") when ADMIN_KEY is unset: rendered greyed out, unlinked.
-        ("Client Standing", "Update client badges, tiers and referrals",
-         (SYNDICATE_DASH_URL + "&view=standing") if SYNDICATE_DASH_URL else None),
         ("Deal alerts", "Active deals with live counterparty match counts, and a "
                         "button to alert them.",
          ADMIN_ALERTS_URL),
         ("Deal matcher", "Paste an inbound inquiry, match it against the book, draft "
                          "the intro email.",
          "https://izahxskgeee5mihwi7y62v333q0ajkji.lambda-url.us-east-1.on.aws/?key=Vq83RkPnZ2wYhT6d"),
-        ("News mailer composer", "Compose and send the company news mailer.",
-         "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?view=news&key=alkj%2A707q235-qjdf"),
-        ("Engagement Docs", "Sell-side agreement and Schedule A, prefilled from a deal "
-                            "or person. Preview only for now.",
-         "?view=engagement"),
+        ("Send a link", "Sign-in links for clients, update and LOI links for deals, "
+                        "bid and offer links for companies.",
+         "?view=sendlink"),
         ("WhatsApp capture", "Sort new WhatsApp contacts as Client or Personal, and send "
                              "today's Client messages to the compliance inbox.",
          WHATSAPP_CAPTURE_URL),
     ]
-    # Every tool opens in its own tab, so the hub stays put behind them.
-    cards = ""
-    for title, desc, href in tiles:
-        if href is None:  # keyed card shown disabled when ADMIN_KEY is unset
-            cards += (f'<div class="hub-card hub-card-off">'
-                      f'<div class="hub-title">{html.escape(title)}</div>'
-                      f'<div class="hub-desc">{html.escape(desc)}</div></div>')
-            continue
-        if not href:  # keyed link omitted when ADMIN_KEY is unset
-            continue
-        cards += (f'<a class="hub-card" href="{html.escape(href, quote=True)}"'
-                  f' target="_blank" rel="noopener">'
-                  f'<div class="hub-title">{html.escape(title)}</div>'
-                  f'<div class="hub-desc">{html.escape(desc)}</div></a>')
+    mailers = [
+        ("News mailer composer", "Compose and send the company news mailer.",
+         "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?view=news&key=alkj%2A707q235-qjdf"),
+        ("Weekly mailer recipients", "First name and email for the SharePoint flow.",
+         ADMIN_MAILER_URL),
+    ]
+    clients = [
+        # None (not "") when ADMIN_KEY is unset: rendered greyed out, unlinked.
+        ("Client Standing", "Update client badges, tiers and referrals",
+         (SYNDICATE_DASH_URL + "&view=standing") if SYNDICATE_DASH_URL else None),
+        ("Auctions", "Create an auction, view the order book, invite buyers.",
+         "?view=auctions"),
+        ("Third-party pricing", "Update Hiive bid, ask and mark for tracked names.",
+         ADMIN_PRICING_URL),
+    ]
+    archived = [
+        ("Engagement Docs", "Sell-side agreement and Schedule A, prefilled from a deal "
+                            "or person. Preview only for now. Not approved for use.",
+         "?view=engagement"),
+        ("All portfolios", "Every client's holdings in one roll-up.",
+         "?view=portfolios"),
+    ]
 
-    sellers = syndicator_eligible_sellers()
-    seller_rows = ""
-    for r in sellers[:50]:
-        if not SYNDICATE_DASH_URL:
-            seller_rows += (
-                '<li class="syn-row">'
-                f'<span class="syn-name">{html.escape(r["full_name"])}</span>'
-                f' &middot; <span class="syn-co">{html.escape(r["company_name"])}</span>'
-                '</li>'
-            )
-            continue
-        my_deals_href = f"{SYNDICATE_DASH_URL}&view_as={urllib.parse.quote(r['email'])}"
-        intros_href = my_deals_href + "&tab=intros"
-        seller_rows += (
-            '<li class="syn-row">'
-            f'<span class="syn-name">{html.escape(r["full_name"])}</span>'
-            f' &middot; <span class="syn-co">{html.escape(r["company_name"])}</span>'
-            f' &middot; <a href="{html.escape(my_deals_href, quote=True)}" target="_blank" rel="noopener">My Deals</a>'
-            f' &middot; <a href="{html.escape(intros_href, quote=True)}" target="_blank" rel="noopener">Intros</a>'
-            '</li>'
-        )
-    syn_card = (
-        '<div class="hub-card syn-card">'
-        '<div class="hub-title">Syndicator Dashboard</div>'
-        + (f'<a href="{html.escape(SYNDICATE_DASH_URL, quote=True)}" target="_blank" rel="noopener">Open admin view</a>'
-           if SYNDICATE_DASH_URL else '') +
-        f'<p class="syn-count">{len(sellers)} sellers eligible</p>'
-        f'<ul class="syn-list">{seller_rows}</ul>'
-        '</div>'
-    )
+    def section(label, cards):
+        return (f'<div class="hub-label">{html.escape(label)}</div>'
+                f'<div class="hub-grid">{cards}</div>')
+
+    try:
+        blockbook = _blockbook_card_html()
+    except Exception as e:  # never break the admin page
+        print(f"Admin hub: Blockbook card failed (non-fatal): {type(e).__name__}: {e}")
+        blockbook = ('<div class="hub-card syn-card"><div class="hub-title">Blockbook</div>'
+                     '<input class="syn-search" type="search" disabled>'
+                     '<p class="syn-unavail">Tenant list unavailable</p></div>')
+    body = (section("Blockbook", blockbook)
+            + section("Daily", _hub_cards_html(daily))
+            + section("Mailers", _hub_cards_html(mailers))
+            + section("Clients & pricing", _hub_cards_html(clients))
+            + f'<details class="hub-archived"><summary class="hub-label">Archived ({len(archived)})</summary>'
+              f'<div class="hub-grid">{_hub_cards_html(archived, "hub-card-muted")}</div></details>')
 
     return html_response(f"""
     <style>
+      .hub-label {{ font-size:12px; font-weight:600; letter-spacing:0.14em;
+                    text-transform:uppercase; color:var(--muted); margin:28px 0 0; }}
       .hub-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
-                   gap:14px; margin-top:18px; }}
+                   gap:14px; margin-top:12px; }}
       .hub-card {{ display:block; border:1px solid var(--line); border-radius:8px;
                    padding:16px 18px; text-decoration:none; color:inherit;
                    background:#fff; transition:border-color .15s, background .15s; }}
       .hub-card:hover {{ border-color:var(--ink); background:#faf8f3; }}
       .hub-card-off, .hub-card-off:hover {{ opacity:.5; cursor:default;
                    border-color:var(--line); background:#fff; }}
+      .hub-card-muted {{ opacity:.6; }}
+      .hub-archived summary {{ cursor:pointer; }}
       .hub-title {{ font-weight:600; font-size:16px; margin-bottom:5px; }}
       .hub-desc {{ font-size:13px; color:#6b7280; line-height:1.45; }}
       .syn-card {{ grid-column: 1 / -1; }}
-      .syn-count {{ font-size:12px; color:#6b7280; margin:10px 0 6px; }}
-      .syn-list {{ list-style:none; max-height:280px; overflow-y:auto; }}
+      .syn-card:hover {{ border-color:var(--line); background:#fff; }}
+      .syn-head {{ display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }}
+      .syn-admin {{ font-size:12px; color:var(--ink); }}
+      .syn-count {{ font-size:12px; color:#6b7280; margin-left:auto; }}
+      .syn-search {{ width:100%; box-sizing:border-box; margin:10px 0 6px; padding:8px 10px;
+                     border:1px solid var(--line); border-radius:6px; font:inherit; font-size:14px; }}
+      .syn-unavail {{ font-size:13px; color:#6b7280; margin:4px 0 0; }}
+      .syn-list {{ list-style:none; max-height:280px; overflow-y:auto; padding:0; margin:0; }}
       .syn-row {{ font-size:13px; padding:5px 0; border-top:1px solid var(--line); }}
       .syn-row:first-child {{ border-top:none; }}
       .syn-name {{ font-weight:600; }}
@@ -3776,7 +3846,7 @@ def render_admin_hub():
     </style>
     <h1>Admin</h1>
     <p class="sub">Internal tools. Nothing here is visible to clients.</p>
-    <div class="hub-grid">{cards}{syn_card}</div>
+    {body}
     """, eyebrow="Admin", is_admin=True, view="admin")
 
 
