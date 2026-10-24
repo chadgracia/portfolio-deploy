@@ -26,4 +26,5 @@ jobs:
           pip install --no-deps --target build pypdf==6.19.0
           cp lambda_function.py build/
           (cd build && zip -qr ../function.zip .)
-          aws lambda update-function-code --function-name Portfolio --zip-file fileb://function.zip
+          aws lambda update-function-code --function-name Portfolio --zip-file fileb://function.zip \
+            --query '{State:State,LastUpdateStatus:LastUpdateStatus,Runtime:Runtime,MemorySize:MemorySize,Timeout:Timeout}' --output json
