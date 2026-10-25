@@ -2036,6 +2036,7 @@ def _share_audience(st):
 # counterparties see the client's name and, with sharing on, their standing
 # (star + checkmarks) and the qualitative closer chip, hence "track record".
 # The card never describes what is or isn't visible before an introduction.
+TIERS_REFERRAL_CTA = "Introduce a new client who completes onboarding to reach Preferred and lower your commissions."
 SHARE_COPY_NAMED = "Your name and track record are shared only with counterparties you\u2019re introduced to."
 
 
@@ -2132,10 +2133,12 @@ def _tiers_card_html(st, tiers_href=""):
         nxt = "Complete the open items above to qualify."
     link = (f'<p class="tc-link"><a href="{tiers_href}" target="_blank" rel="noopener">How tiers work &rarr;</a></p>'
             if tiers_href else "")
+    # Last line of the card, only while the client has no tier yet.
+    cta = f'<p class="tc-cta">{html.escape(TIERS_REFERRAL_CTA)}</p>' if not tier else ""
     return ('<div class="sc tc">'
             '<h2 class="sc-title">Commission tiers</h2>'
             f'<div class="tc-grid">{cols}</div>'
-            f'<p class="tc-next">{nxt}</p>{link}</div>')
+            f'<p class="tc-next">{nxt}</p>{link}{cta}</div>')
 
 
 _STATUS_CARD_CSS = """
@@ -2198,6 +2201,8 @@ _STATUS_CARD_CSS = """
   .cts .tc-next { font-size: 14px; }
   .cts .tc-next b { color: var(--navy); }
   .cts .tc-link { font-size: 14px; }
+  .cts .tc-cta { margin: 0; padding-top: 14px; border-top: 1px solid var(--rule); width: 100%;
+                 font-size: 16px; font-weight: 600; color: var(--navy); }
   @media (max-width: 480px) { .cts .sc { padding: 18px; } }
   @media (max-width: 480px) { .cts.ys .status { padding: 14px; } }
 """

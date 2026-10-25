@@ -9,7 +9,8 @@ import sys
 
 SRC = os.path.join(os.path.dirname(__file__), "..", "lambda_function.py")
 NEEDED = {"_CTS_TICK", "_SHARE_PREVIEW_SKIP_KEYS", "_SHARE_PREVIEW_SKIP",
-          "SHARE_COPY_NAMED", "_share_audience", "_share_card_html"}
+          "SHARE_COPY_NAMED", "_share_audience", "_share_card_html",
+          "COMMISSION_TIERS", "TIERS_REFERRAL_CTA", "_tiers_card_html"}
 
 tree = ast.parse(open(SRC).read())
 nodes = []
@@ -50,5 +51,14 @@ src_text = open(SRC).read()
 check("Commission Tiers page: no 'anything else about your account' (would imply nothing else is visible)",
       "anything else about your account" not in src_text
       and "I never share trade sizes or referral information." in src_text)
+
+CTA = "Introduce a new client who completes onboarding to reach Preferred and lower your commissions."
+tierless = ns["_tiers_card_html"]({"tier": None, "good_standing": False, "items": []}, "https://example.com/tiers")
+empty_tier = ns["_tiers_card_html"]({"tier": "", "items": []}, "https://example.com/tiers")
+preferred = ns["_tiers_card_html"]({"tier": "preferred", "items": []}, "https://example.com/tiers")
+check("Tiers card: referral line renders for a tierless client, as the card's last element after the tiers link",
+      f'How tiers work &rarr;</a></p><p class="tc-cta">{html.escape(CTA)}</p></div>' in tierless
+      and f'<p class="tc-cta">{html.escape(CTA)}</p>' in empty_tier)
+check("Tiers card: referral line absent for a Preferred client", "tc-cta" not in preferred and CTA not in preferred)
 
 sys.exit(1 if failures else 0)
