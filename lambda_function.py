@@ -3787,6 +3787,9 @@ def render_admin_hub():
         # None (not "") when ADMIN_KEY is unset: rendered greyed out, unlinked.
         ("Client Standing", "Update client badges, tiers and referrals",
          (SYNDICATE_DASH_URL + "&view=standing") if SYNDICATE_DASH_URL else None),
+        ("Research gaps", "Companies clients want to buy where we know few holders: "
+                          "what to ask for next (PitchBook or LinkedIn), ranked by buyer demand.",
+         (SYNDICATE_DASH_URL + "&view=research_gaps") if SYNDICATE_DASH_URL else None),
         ("Auctions", "Create an auction, view the order book, invite buyers.",
          "?view=auctions"),
         ("Third-party pricing", "Update Hiive bid, ask and mark for tracked names.",

@@ -84,7 +84,7 @@ check("archived is a collapsed <details> at the bottom",
 titles = re.findall(r'class="hub-title">([^<]*)<', page)
 check("card order", titles == ["Blockbook", "Daily brief", "Deal alerts", "Deal matcher", "Send a link",
                                "WhatsApp capture", "News mailer composer", "Weekly mailer recipients",
-                               "Client Standing", "Auctions", "Third-party pricing",
+                               "Client Standing", "Research gaps", "Auctions", "Third-party pricing",
                                "Engagement Docs", "All portfolios"])
 archived = page.split("<details")[1]
 check("archived cards muted but still links",
@@ -132,6 +132,7 @@ EXPECTED = [
     "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?view=news&key=alkj%2A707q235-qjdf",
     "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?key=alkj%2A707q235-qjdf&view=mailer",
     f"https://ws4stw4iul75a7yx5dra2wmnq40kipav.lambda-url.us-east-1.on.aws/?key={k}&view=standing",
+    f"https://ws4stw4iul75a7yx5dra2wmnq40kipav.lambda-url.us-east-1.on.aws/?key={k}&view=research_gaps",
     "?view=auctions",
     "https://jw2kk4a73jbft32yf5lr7u22bm0bgkiy.lambda-url.us-east-1.on.aws/",
     "?view=engagement",
