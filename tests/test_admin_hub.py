@@ -81,8 +81,8 @@ check("section labels in order",
 check("archived is a collapsed <details> at the bottom",
       re.search(r'<details class="hub-archived"><summary[^>]*>Archived \(2\)</summary>', page) is not None
       and " open" not in page.split("<details")[1].split(">")[0])
-titles = re.findall(r'class="hub-title">([^<]*)<', page)
-check("card order", titles == ["Blockbook", "Daily brief", "Deal alerts", "Deal matcher", "Send a link",
+titles = re.findall(r'class="hub-title">(?:<span class="hub-icon">[^<]*</span>)?([^<]*)<', page)
+check("card order", titles == ["Blockbook", "Daily brief", "Deal alerts", "Deal List Writer", "Send a link",
                                "WhatsApp capture", "News mailer composer", "Weekly mailer recipients",
                                "Client Standing", "Research gaps", "Auctions", "Third-party pricing",
                                "Engagement Docs", "All portfolios"])
@@ -159,7 +159,7 @@ check("no key: Blockbook greyed out, no input, no fetch",
       '<div class="hub-card hub-card-off syn-card"><div class="hub-title">Blockbook</div></div>' in p3
       and "bb-search" not in p3 and calls3 == [])
 check("no key: Client Standing greyed out, Deal alerts omitted",
-      '<div class="hub-card hub-card-off"><div class="hub-title">Client Standing</div>' in p3
+      '<div class="hub-card hub-card-off"><div class="hub-title"><span class="hub-icon">🏆</span>Client Standing</div>' in p3
       and "Deal alerts" not in p3)
 
 check("syndicator_eligible_sellers removed", "def syndicator_eligible_sellers" not in SRC_TEXT)

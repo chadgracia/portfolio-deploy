@@ -3744,17 +3744,20 @@ def _hub_cards_html(tiles, extra_class=""):
     # Every tool opens in its own tab, so the hub stays put behind them.
     cls = "hub-card" + (" " + extra_class if extra_class else "")
     cards = ""
-    for title, desc, href in tiles:
+    for tile in tiles:
+        title, desc, href = tile[:3]
+        icon = tile[3] if len(tile) > 3 else ""
+        icon_html = f'<span class="hub-icon">{icon}</span>' if icon else ""
         if href is None:  # keyed card shown disabled when ADMIN_KEY is unset
             cards += (f'<div class="{cls} hub-card-off">'
-                      f'<div class="hub-title">{html.escape(title)}</div>'
+                      f'<div class="hub-title">{icon_html}{html.escape(title)}</div>'
                       f'<div class="hub-desc">{html.escape(desc)}</div></div>')
             continue
         if not href:  # keyed link omitted when ADMIN_KEY is unset
             continue
         cards += (f'<a class="{cls}" href="{html.escape(href, quote=True)}"'
                   f' target="_blank" rel="noopener">'
-                  f'<div class="hub-title">{html.escape(title)}</div>'
+                  f'<div class="hub-title">{icon_html}{html.escape(title)}</div>'
                   f'<div class="hub-desc">{html.escape(desc)}</div></a>')
     return cards
 
@@ -3763,30 +3766,29 @@ def render_admin_hub():
     """Admin-only index of every internal tool, in labelled sections."""
     daily = [
         ("Daily brief", "Your queue: invoices, closes, crossed trades, warm leads.",
-         ADMIN_BRIEF_URL),
+         ADMIN_BRIEF_URL, "☀️"),
         ("Deal alerts", "Active deals with live counterparty match counts, and a "
                         "button to alert them.",
          ADMIN_ALERTS_URL),
-        ("Deal matcher", "Paste an inbound inquiry, match it against the book, draft "
-                         "the intro email.",
-         "https://izahxskgeee5mihwi7y62v333q0ajkji.lambda-url.us-east-1.on.aws/?key=Vq83RkPnZ2wYhT6d"),
+        ("Deal List Writer", "Paste an incoming email, get a personalized deal list ready to send.",
+         "https://izahxskgeee5mihwi7y62v333q0ajkji.lambda-url.us-east-1.on.aws/?key=Vq83RkPnZ2wYhT6d", "🖋️"),
         ("Send a link", "Sign-in links for clients, update and LOI links for deals, "
                         "bid and offer links for companies.",
          "?view=sendlink"),
         ("WhatsApp capture", "Sort new WhatsApp contacts as Client or Personal, and send "
                              "today's Client messages to the compliance inbox.",
-         WHATSAPP_CAPTURE_URL),
+         WHATSAPP_CAPTURE_URL, "💬"),
     ]
     mailers = [
         ("News mailer composer", "Compose and send the company news mailer.",
-         "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?view=news&key=alkj%2A707q235-qjdf"),
+         "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?view=news&key=alkj%2A707q235-qjdf", "✉️"),
         ("Weekly mailer recipients", "First name and email for the SharePoint flow.",
-         ADMIN_MAILER_URL),
+         ADMIN_MAILER_URL, "📣"),
     ]
     clients = [
         # None (not "") when ADMIN_KEY is unset: rendered greyed out, unlinked.
         ("Client Standing", "Update client badges, tiers and referrals",
-         (SYNDICATE_DASH_URL + "&view=standing") if SYNDICATE_DASH_URL else None),
+         (SYNDICATE_DASH_URL + "&view=standing") if SYNDICATE_DASH_URL else None, "🏆"),
         ("Research gaps", "Companies clients want to buy where we know few holders: "
                           "what to ask for next (PitchBook or LinkedIn), ranked by buyer demand.",
          (SYNDICATE_DASH_URL + "&view=research_gaps") if SYNDICATE_DASH_URL else None),
@@ -3836,6 +3838,7 @@ def render_admin_hub():
       .hub-card-muted {{ opacity:.6; }}
       .hub-archived summary {{ cursor:pointer; }}
       .hub-title {{ font-weight:600; font-size:16px; margin-bottom:5px; }}
+      .hub-icon {{ margin-right:8px; }}
       .hub-desc {{ font-size:13px; color:#6b7280; line-height:1.45; }}
       .syn-card {{ grid-column: 1 / -1; }}
       .syn-card:hover {{ border-color:var(--line); background:#fff; }}
