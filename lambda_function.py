@@ -3679,13 +3679,21 @@ BLOCKBOOK_SEARCH_SCRIPT = """<script>
 (function () {
   var box = document.getElementById("bb-search");
   if (!box) return;
+  var list = document.querySelector(".syn-list");
   var rows = Array.prototype.slice.call(document.querySelectorAll(".syn-list .syn-row"));
-  box.addEventListener("input", function () {
+  var MAX_MATCHES = 10;
+  function filter() {
     var q = box.value.trim().toLowerCase();
+    var shown = 0;
     rows.forEach(function (r) {
-      r.style.display = (!q || r.getAttribute("data-q").indexOf(q) !== -1) ? "" : "none";
+      var hit = q && shown < MAX_MATCHES && r.getAttribute("data-q").indexOf(q) !== -1;
+      if (hit) shown++;
+      r.style.display = hit ? "" : "none";
     });
-  });
+    if (list) list.style.display = q ? "" : "none";
+  }
+  box.addEventListener("input", filter);
+  filter();
   box.addEventListener("keydown", function (e) {
     if (e.key !== "Enter") return;
     e.preventDefault();
@@ -3737,7 +3745,7 @@ def _blockbook_card_html():
     return ('<div class="hub-card syn-card">' + head +
             '<input id="bb-search" class="syn-search" type="search" autocomplete="off"'
             ' placeholder="Search sellers by name, company or email">'
-            f'<ul class="syn-list">{seller_rows}</ul></div>' + BLOCKBOOK_SEARCH_SCRIPT)
+            f'<ul class="syn-list" style="display:none">{seller_rows}</ul></div>' + BLOCKBOOK_SEARCH_SCRIPT)
 
 
 def _hub_cards_html(tiles, extra_class=""):
@@ -3764,22 +3772,26 @@ def _hub_cards_html(tiles, extra_class=""):
 
 def render_admin_hub():
     """Admin-only index of every internal tool, in labelled sections."""
-    daily = [
+    daily_brief = [
         ("Daily brief", "Your queue: invoices, closes, crossed trades, warm leads.",
          ADMIN_BRIEF_URL, "☀️"),
+    ]
+    supply = [
+        # None (not "") when ADMIN_KEY is unset: rendered greyed out, unlinked.
+        ("Research gaps", "Companies clients want to buy where we know few holders: "
+                          "what to ask for next (PitchBook or LinkedIn), ranked by buyer demand.",
+         (SYNDICATE_DASH_URL + "&view=research_gaps") if SYNDICATE_DASH_URL else None, "🤝"),
+        ("Auctions", "Create an auction, view the order book, invite buyers.",
+         "?view=auctions", "⏱️"),
+        ("Third-party pricing", "Update Hiive bid, ask and mark for tracked names.",
+         ADMIN_PRICING_URL),
+    ]
+    outreach = [
+        ("Deal List Writer", "Paste an incoming email, get a personalized deal list ready to send.",
+         "https://izahxskgeee5mihwi7y62v333q0ajkji.lambda-url.us-east-1.on.aws/?key=Vq83RkPnZ2wYhT6d", "🖋️"),
         ("Deal alerts", "Active deals with live counterparty match counts, and a "
                         "button to alert them.",
          ADMIN_ALERTS_URL, "🔔"),
-        ("Deal List Writer", "Paste an incoming email, get a personalized deal list ready to send.",
-         "https://izahxskgeee5mihwi7y62v333q0ajkji.lambda-url.us-east-1.on.aws/?key=Vq83RkPnZ2wYhT6d", "🖋️"),
-        ("Send a link", "Sign-in links for clients, update and LOI links for deals, "
-                        "bid and offer links for companies.",
-         "?view=sendlink", "🚀"),
-        ("WhatsApp capture", "Sort new WhatsApp contacts as Client or Personal, and send "
-                             "today's Client messages to the compliance inbox.",
-         WHATSAPP_CAPTURE_URL, "💬"),
-    ]
-    mailers = [
         ("News mailer composer", "Compose and send the company news mailer.",
          "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?view=news&key=alkj%2A707q235-qjdf", "✉️"),
         ("Weekly mailer recipients", "First name and email for the SharePoint flow.",
@@ -3789,13 +3801,12 @@ def render_admin_hub():
         # None (not "") when ADMIN_KEY is unset: rendered greyed out, unlinked.
         ("Client Standing", "Update client badges, tiers and referrals",
          (SYNDICATE_DASH_URL + "&view=standing") if SYNDICATE_DASH_URL else None, "🏆"),
-        ("Research gaps", "Companies clients want to buy where we know few holders: "
-                          "what to ask for next (PitchBook or LinkedIn), ranked by buyer demand.",
-         (SYNDICATE_DASH_URL + "&view=research_gaps") if SYNDICATE_DASH_URL else None, "🤝"),
-        ("Auctions", "Create an auction, view the order book, invite buyers.",
-         "?view=auctions", "⏱️"),
-        ("Third-party pricing", "Update Hiive bid, ask and mark for tracked names.",
-         ADMIN_PRICING_URL),
+        ("Send a link", "Sign-in links for clients, update and LOI links for deals, "
+                        "bid and offer links for companies.",
+         "?view=sendlink", "🚀"),
+        ("WhatsApp capture", "Sort new WhatsApp contacts as Client or Personal, and send "
+                             "today's Client messages to the compliance inbox.",
+         WHATSAPP_CAPTURE_URL, "💬"),
     ]
     archived = [
         ("Engagement Docs", "Sell-side agreement and Schedule A, prefilled from a deal "
@@ -3816,10 +3827,11 @@ def render_admin_hub():
         blockbook = ('<div class="hub-card syn-card"><div class="hub-title"><span class="hub-icon">🤝</span>Blockbook</div>'
                      '<input class="syn-search" type="search" disabled>'
                      '<p class="syn-unavail">Tenant list unavailable</p></div>')
-    body = (section("Blockbook", blockbook)
-            + section("Daily", _hub_cards_html(daily))
-            + section("Mailers", _hub_cards_html(mailers))
-            + section("Clients & pricing", _hub_cards_html(clients))
+    body = (f'<div class="hub-label">Start here</div>'
+            f'<div class="hub-grid hub-start">{_hub_cards_html(daily_brief)}{blockbook}</div>'
+            + section("Supply & pricing", _hub_cards_html(supply))
+            + section("Buyer outreach", _hub_cards_html(outreach))
+            + section("Clients & compliance", _hub_cards_html(clients))
             + f'<details class="hub-archived"><summary class="hub-label">Archived ({len(archived)})</summary>'
               f'<div class="hub-grid">{_hub_cards_html(archived, "hub-card-muted")}</div></details>')
 
@@ -3840,7 +3852,8 @@ def render_admin_hub():
       .hub-title {{ font-weight:600; font-size:16px; margin-bottom:5px; }}
       .hub-icon {{ margin-right:8px; }}
       .hub-desc {{ font-size:13px; color:#6b7280; line-height:1.45; }}
-      .syn-card {{ grid-column: 1 / -1; }}
+      .hub-start {{ grid-template-columns:1fr 1fr; align-items:start; }}
+      @media (max-width: 700px) {{ .hub-start {{ grid-template-columns:1fr; }} }}
       .syn-card:hover {{ border-color:var(--line); background:#fff; }}
       .syn-head {{ display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }}
       .syn-admin {{ font-size:12px; color:var(--ink); }}
