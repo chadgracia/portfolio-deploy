@@ -156,7 +156,7 @@ for label, kw in (("failed fetch", {"fail": True}), ("empty list", {"payload": {
 ns3, calls3 = load(admin_key="", payload=PAYLOAD)
 p3 = ns3["render_admin_hub"]()
 check("no key: Blockbook greyed out, no input, no fetch",
-      '<div class="hub-card hub-card-off syn-card"><div class="hub-title">Blockbook</div></div>' in p3
+      '<div class="hub-card hub-card-off syn-card"><div class="hub-title"><span class="hub-icon">🤝</span>Blockbook</div></div>' in p3
       and "bb-search" not in p3 and calls3 == [])
 check("no key: Client Standing greyed out, Deal alerts omitted",
       '<div class="hub-card hub-card-off"><div class="hub-title"><span class="hub-icon">🏆</span>Client Standing</div>' in p3

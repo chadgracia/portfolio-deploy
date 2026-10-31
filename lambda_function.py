@@ -3704,10 +3704,10 @@ def _blockbook_card_html():
     """The full-width Blockbook card at the top of the admin hub."""
     if not SYNDICATE_DASH_URL:  # keyed card shown disabled when ADMIN_KEY is unset
         return ('<div class="hub-card hub-card-off syn-card">'
-                '<div class="hub-title">Blockbook</div></div>')
+                '<div class="hub-title"><span class="hub-icon">🤝</span>Blockbook</div></div>')
     tenants = _blockbook_tenants()
     head = (
-        '<div class="syn-head"><span class="hub-title">Blockbook</span>'
+        '<div class="syn-head"><span class="hub-title"><span class="hub-icon">🤝</span>Blockbook</span>'
         f'<a class="syn-admin" href="{html.escape(SYNDICATE_DASH_URL, quote=True)}"'
         ' target="_blank" rel="noopener">Open admin view</a>'
         + (f'<span class="syn-count">{len(tenants)} sellers</span>' if tenants else '')
@@ -3769,12 +3769,12 @@ def render_admin_hub():
          ADMIN_BRIEF_URL, "☀️"),
         ("Deal alerts", "Active deals with live counterparty match counts, and a "
                         "button to alert them.",
-         ADMIN_ALERTS_URL),
+         ADMIN_ALERTS_URL, "🔔"),
         ("Deal List Writer", "Paste an incoming email, get a personalized deal list ready to send.",
          "https://izahxskgeee5mihwi7y62v333q0ajkji.lambda-url.us-east-1.on.aws/?key=Vq83RkPnZ2wYhT6d", "🖋️"),
         ("Send a link", "Sign-in links for clients, update and LOI links for deals, "
                         "bid and offer links for companies.",
-         "?view=sendlink"),
+         "?view=sendlink", "🚀"),
         ("WhatsApp capture", "Sort new WhatsApp contacts as Client or Personal, and send "
                              "today's Client messages to the compliance inbox.",
          WHATSAPP_CAPTURE_URL, "💬"),
@@ -3791,18 +3791,18 @@ def render_admin_hub():
          (SYNDICATE_DASH_URL + "&view=standing") if SYNDICATE_DASH_URL else None, "🏆"),
         ("Research gaps", "Companies clients want to buy where we know few holders: "
                           "what to ask for next (PitchBook or LinkedIn), ranked by buyer demand.",
-         (SYNDICATE_DASH_URL + "&view=research_gaps") if SYNDICATE_DASH_URL else None),
+         (SYNDICATE_DASH_URL + "&view=research_gaps") if SYNDICATE_DASH_URL else None, "🤝"),
         ("Auctions", "Create an auction, view the order book, invite buyers.",
-         "?view=auctions"),
+         "?view=auctions", "⏱️"),
         ("Third-party pricing", "Update Hiive bid, ask and mark for tracked names.",
          ADMIN_PRICING_URL),
     ]
     archived = [
         ("Engagement Docs", "Sell-side agreement and Schedule A, prefilled from a deal "
                             "or person. Preview only for now. Not approved for use.",
-         "?view=engagement"),
+         "?view=engagement", "📝"),
         ("All portfolios", "Every client's holdings in one roll-up.",
-         "?view=portfolios"),
+         "?view=portfolios", "🗂️"),
     ]
 
     def section(label, cards):
@@ -3813,7 +3813,7 @@ def render_admin_hub():
         blockbook = _blockbook_card_html()
     except Exception as e:  # never break the admin page
         print(f"Admin hub: Blockbook card failed (non-fatal): {type(e).__name__}: {e}")
-        blockbook = ('<div class="hub-card syn-card"><div class="hub-title">Blockbook</div>'
+        blockbook = ('<div class="hub-card syn-card"><div class="hub-title"><span class="hub-icon">🤝</span>Blockbook</div>'
                      '<input class="syn-search" type="search" disabled>'
                      '<p class="syn-unavail">Tenant list unavailable</p></div>')
     body = (section("Blockbook", blockbook)
