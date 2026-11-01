@@ -93,7 +93,7 @@ check("archived cards muted but still links",
 check("Engagement Docs description carries 'Not approved for use.'",
       "Preview only for now. Not approved for use." in archived)
 check("Third-party pricing title + description unchanged",
-      '<div class="hub-title">Third-party pricing</div>'
+      '<div class="hub-title"><span class="hub-icon">💲</span>Third-party pricing</div>'
       '<div class="hub-desc">Update Hiive bid, ask and mark for tracked names.</div>' in page)
 check("no 'Syndicator Dashboard' card left", "Syndicator Dashboard" not in page)
 

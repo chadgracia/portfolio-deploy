@@ -3784,7 +3784,7 @@ def render_admin_hub():
         ("Auctions", "Create an auction, view the order book, invite buyers.",
          "?view=auctions", "⏱️"),
         ("Third-party pricing", "Update Hiive bid, ask and mark for tracked names.",
-         ADMIN_PRICING_URL),
+         ADMIN_PRICING_URL, "💲"),
     ]
     outreach = [
         ("Deal List Writer", "Paste an incoming email, get a personalized deal list ready to send.",
