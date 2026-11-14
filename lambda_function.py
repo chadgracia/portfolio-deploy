@@ -41,7 +41,10 @@ from botocore.exceptions import ClientError
 
 # ── Config ────────────────────────────────────────────────────────────────────
 BUCKET       = "gracia-portfolios"                       # per-client portfolio storage
-HMAC_SECRET  = os.environ.get("HMAC_SECRET", "change-me-in-env")  # set in Lambda env
+HMAC_SECRET  = os.environ.get("HMAC_SECRET", "")  # set in Lambda env; no fallback
+if not HMAC_SECRET:
+    print("HMAC_SECRET is not set: client links, seller links and session/admin cookies "
+          "are neither signed nor accepted.")
 IDENTITY_SECRET = os.environ.get("IDENTITY_SECRET", "")  # shared with trades-gracia-web; verifies the SSO handoff
 LOI_TOKEN_SECRET = os.environ.get("LOI_TOKEN_SECRET", "")  # shared with the LOI signing lambda; signs its deal links
 COOKIE_NAME  = "gg_session"
@@ -2795,12 +2798,14 @@ def sign_id(secret, ident):
 
 
 def make_token(client_id):
-    """Permanent magic-link token: HMAC over the client_id."""
-    return sign_id(HMAC_SECRET, client_id)
+    """Permanent magic-link token: HMAC over the client_id. Empty HMAC_SECRET -> ""."""
+    return sign_id(HMAC_SECRET, client_id) if HMAC_SECRET else ""
 
 
 def verify_token(client_id, token):
-    return hmac.compare_digest(make_token(client_id), token or "")
+    if not HMAC_SECRET or not token:
+        return False
+    return hmac.compare_digest(make_token(client_id), token)
 
 
 def make_seller_token(auction_id):
@@ -2808,11 +2813,13 @@ def make_seller_token(auction_id):
     sign_id construction and HMAC_SECRET as the client magic link, so the
     seller route needs no session or client identity at all -- the token
     alone is the credential."""
-    return sign_id(HMAC_SECRET, f"seller:{auction_id}")
+    return sign_id(HMAC_SECRET, f"seller:{auction_id}") if HMAC_SECRET else ""
 
 
 def verify_seller_token(auction_id, token):
-    return hmac.compare_digest(make_seller_token(auction_id), token or "")
+    if not HMAC_SECRET or not token:
+        return False
+    return hmac.compare_digest(make_seller_token(auction_id), token)
 
 
 def _make_handoff_token(email):
@@ -2865,6 +2872,8 @@ def lookup_person_id_by_email(email):
 
 def make_session(client_id):
     """Signed, expiring session value:  base64url(client_id|exp).base64url(sig)."""
+    if not HMAC_SECRET:
+        return ""
     payload = f"{client_id}|{int(time.time()) + SESSION_DAYS * 86400}"
     p = _b64u(payload.encode())
     sig = hmac.new(HMAC_SECRET.encode(), p.encode(), hashlib.sha256).digest()
@@ -2873,6 +2882,8 @@ def make_session(client_id):
 
 def read_session(value):
     """Return client_id if the cookie is validly signed and unexpired, else None."""
+    if not HMAC_SECRET:
+        return None
     try:
         p, s = (value or "").split(".", 1)
         expected = hmac.new(HMAC_SECRET.encode(), p.encode(), hashlib.sha256).digest()
@@ -2895,6 +2906,8 @@ def make_admin_cookie(admin_id):
     two cookie types from being swapped for one another. A session value fed to
     read_admin_cookie fails the kind check, and an admin value fed to read_session
     fails its int(exp) parse, even though both verify under the same key."""
+    if not HMAC_SECRET:
+        return ""
     payload = f"admin|{admin_id}|{int(time.time()) + ADMIN_DAYS * 86400}"
     p = _b64u(payload.encode())
     sig = hmac.new(HMAC_SECRET.encode(), p.encode(), hashlib.sha256).digest()
@@ -2906,6 +2919,8 @@ def read_admin_cookie(value):
     AND still listed in ADMIN_CLIENT_IDS, else None. The membership re-check means
     removing someone from the env var revokes their stickiness immediately, instead
     of leaving a year-long cookie standing."""
+    if not HMAC_SECRET:
+        return None
     try:
         p, s = (value or "").split(".", 1)
         expected = hmac.new(HMAC_SECRET.encode(), p.encode(), hashlib.sha256).digest()
@@ -2943,6 +2958,8 @@ def make_view_as_cookie(admin_id, view_pid):
     """Signed, expiring admin "view as" marker: base64url("viewas"|admin|pid|exp).sig.
     Same HMAC construction as the session/admin cookies; the "viewas" first field
     keeps it from verifying as either of them."""
+    if not HMAC_SECRET:
+        return ""
     payload = f"viewas|{admin_id}|{view_pid}|{int(time.time()) + VIEW_AS_DAYS * 86400}"
     p = _b64u(payload.encode())
     sig = hmac.new(HMAC_SECRET.encode(), p.encode(), hashlib.sha256).digest()
@@ -2953,7 +2970,7 @@ def read_view_as_cookie(value, admin_id):
     """The viewed client's id if the cookie is validly signed, unexpired and was
     minted for THIS admin, else None."""
     try:
-        if not admin_id:
+        if not admin_id or not HMAC_SECRET:
             return None
         p, s = (value or "").split(".", 1)
         expected = hmac.new(HMAC_SECRET.encode(), p.encode(), hashlib.sha256).digest()
