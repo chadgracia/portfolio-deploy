@@ -14,7 +14,8 @@ import urllib.parse
 import urllib.request
 
 SRC = os.path.join(os.path.dirname(__file__), "..", "lambda_function.py")
-NEEDED = {"ADMIN_BRIEF_URL", "ADMIN_MAILER_URL", "ADMIN_PRICING_URL", "ADMIN_KEY", "_ADMIN_KEY_QS",
+NEEDED = {"BRIEF_BASE_URL", "BRIEF_PAGE_KEY", "_BRIEF_KEY_QS", "ADMIN_NEWS_URL",
+          "DEAL_MATCHER_KEY", "DEAL_LIST_WRITER_URL", "ADMIN_BRIEF_URL", "ADMIN_MAILER_URL", "ADMIN_PRICING_URL", "ADMIN_KEY", "_ADMIN_KEY_QS",
           "ADMIN_ALERTS_URL", "SYNDICATE_DASH_URL", "WHATSAPP_ADMIN_KEY", "WHATSAPP_CAPTURE_URL",
           "BLOCKBOOK_SEARCH_SCRIPT", "_blockbook_tenants", "_blockbook_card_html",
           "_hub_cards_html", "render_admin_hub"}
@@ -32,9 +33,12 @@ PEOPLE = {"by_email": {"natoli@mangustacap.com": "7"},
           "by_id": {"7": {"email": "natoli@mangustacap.com", "first_name": "Nat", "name": "Nat Oli"}}}
 
 
-def load(admin_key="k*1", whatsapp_key="w1", payload=None, fail=False):
+def load(admin_key="k*1", whatsapp_key="w1", payload=None, fail=False,
+         brief_key="test-brief*key", matcher_key="test-matcher-key"):
     os.environ["ADMIN_KEY"] = admin_key
     os.environ["WHATSAPP_ADMIN_KEY"] = whatsapp_key
+    os.environ["BRIEF_PAGE_KEY"] = brief_key
+    os.environ["DEAL_MATCHER_KEY"] = matcher_key
     calls = []
 
     def fake_urlopen(req, timeout=None):
@@ -123,16 +127,18 @@ check("scroll box kept", ".syn-list {{ list-style:none; max-height:280px; overfl
 
 # No card URL changed
 k = urllib.parse.quote("k*1", safe="")
+bk = urllib.parse.quote("test-brief*key", safe="")
+mk = urllib.parse.quote("test-matcher-key", safe="")
 EXPECTED = [
-    "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?key=alkj%2A707q235-qjdf",
+    f"https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?key={bk}",
     f"https://ws4stw4iul75a7yx5dra2wmnq40kipav.lambda-url.us-east-1.on.aws/?key={k}",
     f"https://ws4stw4iul75a7yx5dra2wmnq40kipav.lambda-url.us-east-1.on.aws/?key={k}&view=research_gaps",
     "?view=auctions",
     "https://jw2kk4a73jbft32yf5lr7u22bm0bgkiy.lambda-url.us-east-1.on.aws/",
-    "https://izahxskgeee5mihwi7y62v333q0ajkji.lambda-url.us-east-1.on.aws/?key=Vq83RkPnZ2wYhT6d",
+    f"https://izahxskgeee5mihwi7y62v333q0ajkji.lambda-url.us-east-1.on.aws/?key={mk}",
     f"https://3m3tx5bqrdvddzsyjitnjiipjy0hftoe.lambda-url.us-east-1.on.aws/?key={k}",
-    "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?view=news&key=alkj%2A707q235-qjdf",
-    "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?key=alkj%2A707q235-qjdf&view=mailer",
+    f"https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?view=news&key={bk}",
+    f"https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?key={bk}&view=mailer",
     f"https://ws4stw4iul75a7yx5dra2wmnq40kipav.lambda-url.us-east-1.on.aws/?key={k}&view=standing",
     "?view=sendlink",
     "https://scrqjg5mbppzctgagxbslh7yve0fbzyp.lambda-url.us-east-1.on.aws/?key=w1",
@@ -142,6 +148,17 @@ EXPECTED = [
 card_links = re.findall(r'<a class="(?:hub-card[^"]*|syn-admin)" href="([^"]*)" target="_blank" rel="noopener">', page)
 check("every card URL unchanged, all target=_blank",
       [html.unescape(u) for u in card_links] == EXPECTED)
+
+# BRIEF_PAGE_KEY / DEAL_MATCHER_KEY unset -> those cards are not rendered at all
+nsk, _ = load(payload=PAYLOAD, brief_key="", matcher_key="")
+pk = nsk["render_admin_hub"]()
+check("no brief key: Daily brief / news / mailer cards omitted",
+      "Daily brief" not in pk and "News mailer composer" not in pk
+      and "Weekly mailer recipients" not in pk and "bddpwqsqvt32" not in pk)
+check("no matcher key: Deal List Writer omitted", "Deal List Writer" not in pk and "izahxskg" not in pk)
+check("other cards still render without those keys", "Deal alerts" in pk and "Client Standing" in pk)
+check("no real key literal left in the source",
+      not re.search(r"(bddpwqsqvt32|izahxskg)[^\n\"]*key=[A-Za-z0-9%*_-]{8}", SRC_TEXT))
 
 # Failed and empty fetch -> disabled state, page still renders
 for label, kw in (("failed fetch", {"fail": True}), ("empty list", {"payload": {"count": 0, "tenants": []}}),

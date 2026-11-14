@@ -3301,6 +3301,20 @@ def _deal_name(deal_id):
     return ""
 
 
+_ML_SECTION_HTML = """    <section class="sl-sec">
+      <div class="sl-head"><span class="sl-num">4</span>
+        <h2 class="sl-h2">Mailer list</h2></div>
+      <p class="sl-who">Takes a Pipeline <strong>saved-search ID</strong> and opens that
+        search's mailer list — the recipients for a weekly send.</p>
+      <div class="sl-form">
+        <input id="ml-search" type="text" inputmode="numeric" value="19530439">
+        <button type="button" onclick="mlGo()">Open mailer list</button>
+      </div>
+      <p class="sl-hint">Weekly Mailer Leads is 19530439 — paste any saved search ID.</p>
+    </section>
+"""
+
+
 def render_send_link():
     """Admin-only: the one page every outbound link comes from. Three sections —
     a client's sign-in link, a deal's update/LOI links, a company's bid/offer links.
@@ -3448,18 +3462,7 @@ def render_send_link():
       </div>
     </section>
 
-    <section class="sl-sec">
-      <div class="sl-head"><span class="sl-num">4</span>
-        <h2 class="sl-h2">Mailer list</h2></div>
-      <p class="sl-who">Takes a Pipeline <strong>saved-search ID</strong> and opens that
-        search's mailer list — the recipients for a weekly send.</p>
-      <div class="sl-form">
-        <input id="ml-search" type="text" inputmode="numeric" value="19530439">
-        <button type="button" onclick="mlGo()">Open mailer list</button>
-      </div>
-      <p class="sl-hint">Weekly Mailer Leads is 19530439 — paste any saved search ID.</p>
-    </section>
-    <script>
+""" + (_ML_SECTION_HTML if ADMIN_MAILER_URL else "") + """    <script>
       function slCopy(elId) {
         var el = document.getElementById(elId);
         el.select();
@@ -3552,11 +3555,12 @@ def render_send_link():
         document.getElementById('wb-sell-open').href = base + 'sell';
         document.getElementById('wb-out').style.display = 'block';
       }
+      var ML_BASE = """ + json.dumps(ADMIN_MAILER_URL) + """;
       function mlGo() {
+        if (!ML_BASE) { return; }
         var id = (document.getElementById('ml-search').value || '').trim();
         if (!/^[0-9]+$/.test(id)) { return; }
-        var url = 'https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/'
-          + '?key=alkj%2A707q235-qjdf&view=mailer&list=1&search=' + id;
+        var url = ML_BASE + '&list=1&search=' + id;
         window.open(url, '_blank');
       }
     </script>
@@ -3678,8 +3682,19 @@ def _extend_auction(auc, days):
     return True, None
 
 
-ADMIN_BRIEF_URL = "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?key=alkj%2A707q235-qjdf"
-ADMIN_MAILER_URL = ADMIN_BRIEF_URL + "&view=mailer"
+# Daily-brief page (and its mailer/news views) key, from the Lambda env.
+# Empty -> those admin-hub links and the Send-a-link "Mailer list" button are omitted.
+BRIEF_BASE_URL = "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/"
+BRIEF_PAGE_KEY = os.environ.get("BRIEF_PAGE_KEY", "")
+_BRIEF_KEY_QS = "?key=" + urllib.parse.quote(BRIEF_PAGE_KEY, safe="")
+ADMIN_BRIEF_URL = (BRIEF_BASE_URL + _BRIEF_KEY_QS) if BRIEF_PAGE_KEY else ""
+ADMIN_MAILER_URL = (ADMIN_BRIEF_URL + "&view=mailer") if BRIEF_PAGE_KEY else ""
+ADMIN_NEWS_URL = (BRIEF_BASE_URL + "?view=news&key=" + urllib.parse.quote(BRIEF_PAGE_KEY, safe="")
+                  ) if BRIEF_PAGE_KEY else ""
+# deal-matcher ("Deal List Writer") key, from the Lambda env. Empty -> link omitted.
+DEAL_MATCHER_KEY = os.environ.get("DEAL_MATCHER_KEY", "")
+DEAL_LIST_WRITER_URL = ("https://izahxskgeee5mihwi7y62v333q0ajkji.lambda-url.us-east-1.on.aws/?key="
+                        + urllib.parse.quote(DEAL_MATCHER_KEY, safe="")) if DEAL_MATCHER_KEY else ""
 ADMIN_PRICING_URL = "https://jw2kk4a73jbft32yf5lr7u22bm0bgkiy.lambda-url.us-east-1.on.aws/"
 # Shared admin key for deal-alerts and syndicate-dash, from the Lambda env.
 # Empty -> both URLs are "": server-side syndicate fetches fail soft and the
@@ -3873,12 +3888,12 @@ def render_admin_hub():
     ]
     outreach = [
         ("Deal List Writer", "Paste an incoming email, get a personalized deal list ready to send.",
-         "https://izahxskgeee5mihwi7y62v333q0ajkji.lambda-url.us-east-1.on.aws/?key=Vq83RkPnZ2wYhT6d", "🖋️"),
+         DEAL_LIST_WRITER_URL, "🖋️"),
         ("Deal alerts", "Active deals with live counterparty match counts, and a "
                         "button to alert them.",
          ADMIN_ALERTS_URL, "🔔"),
         ("News mailer composer", "Compose and send the company news mailer.",
-         "https://bddpwqsqvt32ritxpjqlqwhaim0ykbol.lambda-url.us-east-1.on.aws/?view=news&key=alkj%2A707q235-qjdf", "✉️"),
+         ADMIN_NEWS_URL, "✉️"),
         ("Weekly mailer recipients", "First name and email for the SharePoint flow.",
          ADMIN_MAILER_URL, "📣"),
     ]
