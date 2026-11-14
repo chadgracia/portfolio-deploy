@@ -3117,6 +3117,91 @@ def _wl_json(bucket, key, default):
         return default
 
 
+# ── Deal Visibility (Pipeline dropdown on the deal) ──────────────────────────────
+# Blank/unknown = All Investors, so existing deals are unaffected. Private deals are
+# never shown to clients; Interested-only deals are shown only where the row appears
+# because the client has that company on their watchlist (Buy/Sell Interest).
+VISIBILITY_FIELD = "custom_label_4013323"
+VIS_ALL = 7223456          # "All Investors"
+VIS_INTERESTED = 7223457   # "Interested investors only"
+VIS_PRIVATE = 7223458      # "Private"
+VIS_OVERRIDES_KEY = "visibility-overrides.json"   # on COMPANIES_BUCKET, written by deal-update-form
+VIS_OVERRIDES_SECONDS = 60
+VIS_DEALS_SECONDS = 600    # deals.json-derived map; same 10 min as the engagement cache
+_vis_cache = {"deals": None, "deals_ts": 0.0, "ov": None, "ov_ts": 0.0}
+
+
+def _vis_norm(v):
+    """Pipeline dropdown value (int, '7223458', '7223458.0', [7223458], blank) ->
+    VIS_ALL / VIS_INTERESTED / VIS_PRIVATE. Anything else is VIS_ALL."""
+    if isinstance(v, list):
+        v = v[0] if v else None
+    try:
+        oid = int(float(str(v).strip()))
+    except (TypeError, ValueError):
+        return VIS_ALL
+    return oid if oid in (VIS_INTERESTED, VIS_PRIVATE) else VIS_ALL
+
+
+def _vis_s3_json(key, missing):
+    """S3 JSON from COMPANIES_BUCKET; NoSuchKey -> `missing`, other errors raise."""
+    try:
+        obj = boto3.client("s3").get_object(Bucket=COMPANIES_BUCKET, Key=key)
+    except ClientError as e:
+        if (e.response.get("Error") or {}).get("Code") in ("NoSuchKey", "404"):
+            return missing
+        raise
+    return json.loads(obj["Body"].read())
+
+
+def _vis_build_map(raw_deals, overrides):
+    """{str(deal_id): visibility} from deals.json deals, with overrides on top."""
+    out = {}
+    for d in raw_deals if isinstance(raw_deals, list) else []:
+        if isinstance(d, dict) and d.get("id") is not None:
+            out[str(d["id"])] = _vis_norm((d.get("custom_fields") or {}).get(VISIBILITY_FIELD))
+    for did, ent in (overrides if isinstance(overrides, dict) else {}).items():
+        if isinstance(ent, dict) and "v" in ent:
+            out[str(did)] = _vis_norm(ent.get("v"))
+    return out
+
+
+def _visibility_map():
+    """{str(deal_id): visibility} or None when the lookup fails (caller then
+    filters nothing). deals.json map cached VIS_DEALS_SECONDS, overrides 60s."""
+    try:
+        now = time.time()
+        if _vis_cache["deals"] is None or now - _vis_cache["deals_ts"] >= VIS_DEALS_SECONDS:
+            data = _vis_s3_json(DEALS_KEY, None)
+            if not isinstance(data, dict) or not isinstance(data.get("deals"), list):
+                raise ValueError("deals.json missing or malformed")
+            _vis_cache.update(deals=_vis_build_map(data["deals"], None), deals_ts=now)
+            del data
+        if _vis_cache["ov"] is None or now - _vis_cache["ov_ts"] >= VIS_OVERRIDES_SECONDS:
+            ov = _vis_s3_json(VIS_OVERRIDES_KEY, {})
+            _vis_cache.update(ov=ov if isinstance(ov, dict) else {}, ov_ts=now)
+        out = dict(_vis_cache["deals"])
+        out.update(_vis_build_map([], _vis_cache["ov"]))
+        return out
+    except Exception as e:
+        print(f"visibility: lookup failed; no visibility filtering: {type(e).__name__}")
+        return None
+
+
+def _vis_client_deals(deals, vis, via_watchlist):
+    """Drop live offers a client may not see. vis None (lookup failed) = no filter.
+    Private: always dropped. Interested-only: kept only when via_watchlist."""
+    if vis is None:
+        return deals
+    out = []
+    for d in deals:
+        v = vis.get(str(d.get("id"))) if isinstance(d, dict) else None
+        if v == VIS_PRIVATE or (v == VIS_INTERESTED and not via_watchlist):
+            continue
+        out.append(d)
+    return out
+
+
 def _wl_buyers(name):
     """People carrying this company in their Buy Interest field, from holder_counts.json."""
     data = _wl_json(COMPANIES_BUCKET, WL_HOLDERS_KEY, {})
@@ -7432,6 +7517,9 @@ def render_watchlist_status(client_id, is_admin=False):
     deals = _wl_json(WL_DEALS_BUCKET, WL_DEALS_KEY, [])
     if not isinstance(deals, list):
         deals = []
+    # Every row here is shown because the company is on this client's watchlist,
+    # so Interested-only deals stay; Private deals never reach a client.
+    deals = _vis_client_deals(deals, _visibility_map(), via_watchlist=True)
 
     _wl_seen, _wl_uniq = set(), []
     for _n in sides["buy"] + sides["sell"]:
