@@ -2114,9 +2114,9 @@ def _tiers_card_html(st, tiers_href=""):
     cols = ""
     for key, name, pct, req, _incl in COMMISSION_TIERS:
         cur = key == tier
-        tag = '<span class="tc-tag">Your tier</span>' if cur else ""
+        tag = '<span class="tc-tag">Current</span>' if cur else ""
         cols += (f'<div class="tc-tier{" cur" if cur else (" muted" if tier in keys else "")}">'
-                 f'<div class="tc-head"><span class="tc-name">{html.escape(name)}</span>{tag}</div>'
+                 f'{tag}<div class="tc-head"><span class="tc-name">{html.escape(name)}</span></div>'
                  f'<div class="tc-pct">{pct}% <small>off</small></div>'
                  '<ul class="tc-req">' + "".join(f'<li>{html.escape(x)}</li>' for x in req) + '</ul></div>')
     trades_note = ""
@@ -2136,10 +2136,18 @@ def _tiers_card_html(st, tiers_href=""):
         nxt = "Complete the open items above to qualify."
     link = (f'<p class="tc-link"><a href="{tiers_href}" target="_blank" rel="noopener">How tiers work &rarr;</a></p>'
             if tiers_href else "")
+    # Current-tier line under the heading: the same standing_json "tier" that
+    # marks the card, with name and % from COMMISSION_TIERS.
+    if tier in keys:
+        _k, cur_name, cur_pct, _r, _i = COMMISSION_TIERS[keys.index(tier)]
+        cur_line = f"Your current tier: {html.escape(cur_name)} &mdash; {cur_pct}% off standard commission."
+    else:
+        cur_line = "Your current tier: none yet &mdash; standard commission applies."
     # Last line of the card, only while the client has no tier yet.
     cta = f'<p class="tc-cta">{html.escape(TIERS_REFERRAL_CTA)}</p>' if not tier else ""
     return ('<div class="sc tc">'
             '<h2 class="sc-title">Commission tiers</h2>'
+            f'<p class="tc-current">{cur_line}</p>'
             f'<div class="tc-grid">{cols}</div>'
             f'<p class="tc-next">{nxt}</p>{link}{cta}</div>')
 
@@ -2196,7 +2204,9 @@ _STATUS_CARD_CSS = """
   .cts .tc-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
   .cts .tc-name { font-family: var(--serif); font-size: 18px; font-weight: 600; }
   .cts .tc-tag { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
-                 color: #fff; background: var(--navy); border-radius: 999px; padding: 2px 9px; }
+                 color: #fff; background: var(--navy); border-radius: 999px; padding: 2px 9px;
+                 align-self: flex-start; }
+  .cts .tc-current { font-size: 15px; font-weight: 600; margin: 0; }
   .cts .tc-pct { font-size: 22px; font-weight: 600; color: var(--navy); line-height: 1.15;
                  font-variant-numeric: tabular-nums; }
   .cts .tc-pct small { font-size: 12px; font-weight: 400; color: var(--muted); }
@@ -2209,6 +2219,31 @@ _STATUS_CARD_CSS = """
   @media (max-width: 480px) { .cts .sc { padding: 18px; } }
   @media (max-width: 480px) { .cts.ys .status { padding: 14px; } }
 """
+
+
+def _fmt_trade_total(amount):
+    """Completed-trades total: < $1K "$0", < $1M nearest "$<n>K", else "$<n.n>M"."""
+    try:
+        v = float(amount)
+    except (TypeError, ValueError):
+        return ""
+    if v < 1_000:
+        return "$0"
+    if v < 1_000_000:
+        k = int(round(v / 1_000))
+        return "$1.0M" if k >= 1_000 else f"${k:,}K"
+    return f"${v / 1_000_000:.1f}M"
+
+
+def _trades_status_note(it):
+    """The "Completed trades" note: standing_json's "<N> trade(s) · $X.XM" with the
+    amount re-rendered from the raw volume_usd when present (else unchanged)."""
+    note = str(it.get("note") or "")
+    vol = it.get("volume_usd")
+    if " \u00b7 " not in note or isinstance(vol, bool) or not isinstance(vol, (int, float)):
+        return note
+    amt = _fmt_trade_total(vol)
+    return note.rsplit(" \u00b7 ", 1)[0] + " \u00b7 " + amt if amt else note
 
 
 def _render_status_card(person_id, viewing_as=False, share_err=False):
@@ -2234,7 +2269,7 @@ def _render_status_card(person_id, viewing_as=False, share_err=False):
             if not isinstance(it, dict):
                 continue
             label = html.escape(str(it.get("label") or ""))
-            note = html.escape(str(it.get("note") or ""))
+            note = html.escape(_trades_status_note(it) if it.get("key") == "trades" else str(it.get("note") or ""))
             href = _safe_href(it.get("form_url"))
             extra = ""
             if note:

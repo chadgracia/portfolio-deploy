@@ -10,7 +10,8 @@ import sys
 SRC = os.path.join(os.path.dirname(__file__), "..", "lambda_function.py")
 NEEDED = {"_CTS_TICK", "_SHARE_PREVIEW_SKIP_KEYS", "_SHARE_PREVIEW_SKIP",
           "SHARE_COPY_NAMED", "_share_audience", "_share_card_html",
-          "COMMISSION_TIERS", "TIERS_REFERRAL_CTA", "_tiers_card_html"}
+          "COMMISSION_TIERS", "TIERS_REFERRAL_CTA", "_tiers_card_html",
+          "_fmt_trade_total", "_trades_status_note"}
 
 tree = ast.parse(open(SRC).read())
 nodes = []
@@ -60,5 +61,41 @@ check("Tiers card: referral line renders for a tierless client, as the card's la
       f'How tiers work &rarr;</a></p><p class="tc-cta">{html.escape(CTA)}</p></div>' in tierless
       and f'<p class="tc-cta">{html.escape(CTA)}</p>' in empty_tier)
 check("Tiers card: referral line absent for a Preferred client", "tc-cta" not in preferred and CTA not in preferred)
+
+# Current-tier line + "Current" card label.
+gold = ns["_tiers_card_html"]({"tier": "gold", "items": []}, "")
+platinum = ns["_tiers_card_html"]({"tier": "platinum", "items": []}, "")
+check("Tiers card: current line for Preferred, directly under the heading",
+      '<h2 class="sc-title">Commission tiers</h2><p class="tc-current">Your current tier: Preferred &mdash; '
+      '10% off standard commission.</p><div class="tc-grid">' in preferred)
+check("Tiers card: current line for Gold / Platinum",
+      "Your current tier: Gold &mdash; 15% off standard commission." in gold
+      and "Your current tier: Platinum &mdash; 20% off standard commission." in platinum)
+check("Tiers card: current line for no tier (None, blank, unknown key)",
+      all("Your current tier: none yet &mdash; standard commission applies." in h for h in
+          (tierless, empty_tier, ns["_tiers_card_html"]({"tier": "bogus", "items": []}, ""))))
+check("Tiers card: exactly one card marked Current, at its top",
+      gold.count('class="tc-tier cur"') == 1 and gold.count(">Current</span>") == 1
+      and '<div class="tc-tier cur"><span class="tc-tag">Current</span><div class="tc-head"><span class="tc-name">Gold<' in gold
+      and "Current</span>" not in tierless)
+check("Tiers card: next-step line kept for a tierless client in good standing",
+      "Introduce a new client who completes onboarding to reach Preferred." in
+      ns["_tiers_card_html"]({"tier": None, "good_standing": True, "items": []}, ""))
+
+# Completed-trades total.
+f = ns["_fmt_trade_total"]
+check("trade total: < $1K -> $0", f(0) == "$0" and f(999) == "$0")
+check("trade total: K band rounds to nearest 1,000",
+      f(1000) == "$1K" and f(100000) == "$100K" and f(149499) == "$149K" and f(149500) == "$150K")
+check("trade total: >= $1M unchanged M format", f(1_000_000) == "$1.0M" and f(2_500_000) == "$2.5M"
+      and f(10_100_000) == "$10.1M")
+tn = ns["_trades_status_note"]
+check("trades note: amount from volume_usd, count text unchanged",
+      tn({"note": "1 trade \u00b7 $0.1M", "volume_usd": 100000}) == "1 trade \u00b7 $100K"
+      and tn({"note": "4 trades \u00b7 $10.1M", "volume_usd": 10_100_000}) == "4 trades \u00b7 $10.1M"
+      and tn({"note": "0 trades \u00b7 $0.0M", "volume_usd": 0}) == "0 trades \u00b7 $0")
+check("trades note: no volume_usd (older syndicate-dash) -> note unchanged",
+      tn({"note": "1 trade \u00b7 $0.1M"}) == "1 trade \u00b7 $0.1M"
+      and tn({"note": "1 trade \u00b7 $0.1M", "volume_usd": "x"}) == "1 trade \u00b7 $0.1M")
 
 sys.exit(1 if failures else 0)
