@@ -98,4 +98,17 @@ check("trades note: no volume_usd (older syndicate-dash) -> note unchanged",
       tn({"note": "1 trade \u00b7 $0.1M"}) == "1 trade \u00b7 $0.1M"
       and tn({"note": "1 trade \u00b7 $0.1M", "volume_usd": "x"}) == "1 trade \u00b7 $0.1M")
 
+# Next-step line uses the same K/M amount as the trade total row.
+def _gold(note, vol=None):
+    it = {"key": "trades", "note": note}
+    if vol is not None:
+        it["volume_usd"] = vol
+    return ns["_tiers_card_html"]({"tier": "preferred", "items": [it]}, "")
+check("next-step line: $100K from volume_usd",
+      "You&rsquo;re at 1 trade \u00b7 $100K." in _gold("1 trade \u00b7 $0.1M", 100000))
+check("next-step line: $2.5M from volume_usd",
+      "You&rsquo;re at 3 trades \u00b7 $2.5M." in _gold("3 trades \u00b7 $2.5M", 2_500_000))
+check("next-step line: no volume_usd -> note unchanged",
+      "You&rsquo;re at 1 trade \u00b7 $0.1M." in _gold("1 trade \u00b7 $0.1M"))
+
 sys.exit(1 if failures else 0)

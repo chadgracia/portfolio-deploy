@@ -2122,7 +2122,7 @@ def _tiers_card_html(st, tiers_href=""):
     trades_note = ""
     for it in (st.get("items") or []):
         if isinstance(it, dict) and it.get("key") == "trades":
-            trades_note = str(it.get("note") or "").strip()
+            trades_note = _trades_status_note(it).strip()
     if tier == keys[-1]:
         nxt = "You&rsquo;re at our top tier."
     elif tier in keys:
