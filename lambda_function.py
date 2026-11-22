@@ -8725,6 +8725,312 @@ __TIERS__
 """.replace("__TIERS__", _commission_tiers_page_block())
 
 
+# Hidden static client FAQ at /faq (and ?view=faq). Public (no cookie/token), not
+# linked from anywhere. Plain string, not an f-string: the CSS braces are literal.
+FAQ_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Client FAQ · Chad Gracia, Rainmaker Securities</title>
+<style>
+  :root { --ink:#16202c; --muted:#5d6878; --line:#e2e6eb; --accent:#1f5f8b; --soft:#f4f7fa; }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; color:var(--ink); background:#fff; font:16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .wrap { max-width:800px; margin:0 auto; padding:44px 22px 64px; }
+  header h1 { font-size:32px; line-height:1.2; margin:0 0 8px; letter-spacing:-0.01em; }
+  header p { color:var(--muted); margin:0 0 30px; }
+  a { color:var(--accent); }
+  .toc { border:1px solid var(--line); border-radius:12px; background:var(--soft); padding:22px 24px 10px; margin-bottom:12px; }
+  .toc h2 { font-size:13px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:0 0 14px; border:0; padding:0; }
+  .toc-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px 32px; }
+  .toc-group { margin-bottom:14px; break-inside:avoid; }
+  .toc-group h3 { font-size:14px; margin:0 0 6px; }
+  .toc-group h3 a { color:var(--ink); text-decoration:none; }
+  .toc-group ul { list-style:none; margin:0; padding:0; }
+  .toc-group li { margin:0 0 5px; font-size:15px; line-height:1.4; }
+  .toc-group li a { text-decoration:none; }
+  .toc-group li a:hover, .toc-group h3 a:hover { text-decoration:underline; }
+  section.part > h2 { font-size:13px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:48px 0 4px; padding-top:18px; border-top:1px solid var(--line); scroll-margin-top:16px; }
+  h3.q { font-size:20px; line-height:1.35; margin:28px 0 8px; scroll-margin-top:16px; }
+  p, li { margin:0 0 10px; }
+  ul, ol { padding-left:22px; margin:0 0 14px; }
+  table { border-collapse:collapse; margin:6px 0 14px; min-width:320px; }
+  th, td { text-align:left; padding:7px 24px 7px 0; border-bottom:1px solid var(--line); font-size:15px; }
+  th { color:var(--muted); font-weight:600; }
+  td.num, th.num { text-align:right; padding-right:0; }
+  .callout { border-left:3px solid var(--accent); background:var(--soft); padding:12px 16px; margin:14px 0; border-radius:0 8px 8px 0; }
+  .top { font-size:13px; margin-top:18px; }
+  .top a { color:var(--muted); text-decoration:none; }
+  .signoff { margin-top:48px; padding-top:20px; border-top:1px solid var(--line); }
+  .signoff p { margin:0 0 6px; }
+  .disclosure { margin-top:36px; padding-top:20px; border-top:1px solid var(--line); font-size:12px; line-height:1.6; color:var(--muted); }
+  .disclosure p { margin:0 0 10px; }
+  .disclosure .lead { font-weight:600; color:#3c4654; }
+  .disclosure h4 { font-size:12px; letter-spacing:.06em; margin:18px 0 8px; color:#3c4654; }
+  .disclosure a { color:inherit; }
+  @media (max-width:640px) { .toc-grid { grid-template-columns:1fr; } header h1 { font-size:26px; } }
+</style>
+</head>
+<body>
+<div class="wrap" id="top">
+
+<header>
+  <h1>Client FAQ</h1>
+  <p>This FAQ covers my work as a registered representative of Rainmaker Securities, LLC. All securities transactions described here are handled through Rainmaker.</p>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <h2>Contents</h2>
+  <div class="toc-grid">
+    <div>
+      <div class="toc-group">
+        <h3><a href="#about">About us</a></h3>
+        <ul>
+          <li><a href="#rules">Broker-dealers, Rainmaker and the rules we follow</a></li>
+          <li><a href="#chad">Who is Chad Gracia?</a></li>
+        </ul>
+      </div>
+      <div class="toc-group">
+        <h3><a href="#fees">Fees</a></h3>
+        <ul>
+          <li><a href="#commissions">What are your commissions?</a></li>
+          <li><a href="#repeat">Do repeat clients pay less?</a></li>
+        </ul>
+      </div>
+      <div class="toc-group">
+        <h3><a href="#pricing">Pricing and demand</a></h3>
+        <ul>
+          <li><a href="#price">How is the price set?</a></li>
+          <li><a href="#demand">What does "demand" mean?</a></li>
+        </ul>
+      </div>
+      <div class="toc-group">
+        <h3><a href="#start">Getting started</a></h3>
+        <ul>
+          <li><a href="#minimum">What is your minimum?</a></li>
+          <li><a href="#direct-spv">Direct shares or an SPV?</a></li>
+          <li><a href="#sellers">What do sellers need to provide?</a></li>
+          <li><a href="#buyers">What do buyers need to provide?</a></li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <div class="toc-group">
+        <h3><a href="#start">Getting started (continued)</a></h3>
+        <ul>
+          <li><a href="#verify">How do you verify a seller's shares?</a></li>
+          <li><a href="#cef">Why do I have to fill in the CEF?</a></li>
+          <li><a href="#new-company">Will you cover a company that isn't listed?</a></li>
+          <li><a href="#represent-spv">How do you represent an SPV?</a></li>
+        </ul>
+      </div>
+      <div class="toc-group">
+        <h3><a href="#closing">Introductions and closing</a></h3>
+        <ul>
+          <li><a href="#expectations">What do you expect before and after an introduction?</a></li>
+          <li><a href="#identity">When will I learn who the other side is?</a></li>
+          <li><a href="#process">How does a trade work, start to finish?</a></li>
+          <li><a href="#transfer-notice">What are a Transfer Notice and an SPA?</a></li>
+          <li><a href="#rofr">What is ROFR?</a></li>
+          <li><a href="#spv-transfer">Can an SPV interest be transferred?</a></li>
+          <li><a href="#timing">How long does it take?</a></li>
+          <li><a href="#ipo">What happens if the company goes public?</a></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<section class="part">
+<h2 id="about">About us</h2>
+
+<h3 class="q" id="rules">Broker-dealers, Rainmaker and the rules we follow</h3>
+<p>I am a registered representative of <strong>Rainmaker Securities, LLC</strong> ("RMS"), a broker-dealer registered with the SEC and a member of FINRA and SIPC. Only registered broker-dealers and their registered representatives may be paid transaction-based compensation for arranging securities trades in the United States. You can look up the firm and me on <a href="https://brokercheck.finra.org" target="_blank" rel="noopener">FINRA BrokerCheck</a>.</p>
+<p>Rainmaker was founded in 2004 and launched its late-stage private / pre-IPO practice in 2010. In 2025 it advised on 340 closed transactions totaling about $1 billion, and it has staff in Miami, New York, Los Angeles, San Francisco, Chicago, Buenos Aires, Belgrade, Dubai and Hong Kong. Engagements are non-exclusive, clients can refuse any transaction for any reason, and Rainmaker is paid a success fee only when a trade closes.</p>
+<p>Private-company shares and SPV interests are securities, so every trade I handle is governed by U.S. securities law, including:</p>
+<ul>
+  <li><strong>Securities Act of 1933.</strong> Private shares can only be sold under an exemption from registration, for example Regulation D (Rule 506(b) or 506(c)) or the resale exemptions used for secondary trades. That is why most deals are limited to accredited investors.</li>
+  <li><strong>Securities Exchange Act of 1934 and FINRA rules.</strong> These cover broker registration, fair dealing, communications with the public, supervision and record-keeping. My firm reviews my client communications, and our emails are archived.</li>
+  <li><strong>Bank Secrecy Act and USA PATRIOT Act.</strong> These require Know-Your-Customer (KYC) and anti-money-laundering (AML) checks on every client. See <a href="#cef">Why do I have to fill in the CEF?</a></li>
+  <li><strong>Investment Company Act of 1940.</strong> Most SPVs rely on Section 3(c)(1) or 3(c)(7), which limit who can invest (for example Qualified Clients or Qualified Purchasers).</li>
+</ul>
+<p>I am not a lawyer or tax adviser, and I don't recommend buying or selling any particular security. Please use your own advisers before any transaction.</p>
+
+<h3 class="q" id="chad">Who is Chad Gracia?</h3>
+<p>I have worked in private markets for many years, starting in investor relations for fund managers, and I have brokered more than $130M in private secondary transactions. I focus on the leading edge of investor demand: the AI, robotics and defense companies my clients want, including earlier-stage companies that see less secondary trading. AI, robotics and defense are my specialties.</p>
+<p>I also ran the U.S. Commerce Department's Private Equity and Venture Capital Trade Mission program for many years, introducing U.S. fund managers to investors in the Gulf, with whom I have worked since the mid-1990s. I work with a network of about 1,000 active investors, mostly family offices, funds and experienced individual investors.</p>
+<p>I am based in Kyiv, Ukraine, where I keep a close eye on Ukraine's defense-tech scene, make documentary films and volunteer.</p>
+<p class="top"><a href="#top">↑ Back to contents</a></p>
+</section>
+
+<section class="part">
+<h2 id="fees">Fees</h2>
+
+<h3 class="q" id="commissions">What are your commissions?</h3>
+<p>The usual commission on trades I handle depends on the size of the transaction:</p>
+<table>
+  <thead><tr><th>Transaction size</th><th class="num">Commission</th></tr></thead>
+  <tbody>
+    <tr><td>Up to $1M</td><td class="num">5%</td></tr>
+    <tr><td>$1M – $5M</td><td class="num">4%</td></tr>
+    <tr><td>$5M – $10M</td><td class="num">3.5%</td></tr>
+    <tr><td>Over $10M</td><td class="num">2.5%</td></tr>
+  </tbody>
+</table>
+<p>Each deal's commission is set in its written agreement and may differ from this table.</p>
+<p><strong>Who pays.</strong> Direct shares are always covered by a sell-side engagement, so the seller pays the commission. SPV sellers are almost always engaged too and are responsible for the commission, but they generally add it on top of the funding request sent to buyers. SPV fees (upfront, management, carry) are set by the seller, not by me. I can also show you how the fees of different SPV offerings compare.</p>
+<p><strong>Net and gross.</strong> The <em>net</em> price is what the seller actually receives. The <em>gross</em> price is what the buyer actually pays, including the commission. When you talk price with the other side, say which one you mean.</p>
+<div class="callout">All my engagements are <strong>non-exclusive</strong>, so you are free to work with other brokers, and some charge less. When you compare offers, compare the <strong>net</strong> you would receive (sellers) or the all-in <strong>gross</strong> you would pay, including every SPV layer, fee and carry (buyers). A lower headline commission doesn't always mean a better price.</div>
+
+<h3 class="q" id="repeat">Do repeat clients pay less?</h3>
+<p>Yes. Repeat clients get lower commissions under a measurable system based on completed trades and a record of reliability (prompt replies, honoring agreed terms and meeting payment deadlines). Ask me where you stand.</p>
+<p class="top"><a href="#top">↑ Back to contents</a></p>
+</section>
+
+<section class="part">
+<h2 id="pricing">Pricing and demand</h2>
+
+<h3 class="q" id="price">How is the price set?</h3>
+<p>The bid and the ask come from the buyer and the seller; I don't set the price. What I can do is share market information, such as third-party data, recent crossed trades, firm bids and asks, the last funding round, share class and structure (direct vs. SPV, and how many SPV layers), transfer restrictions, and the company's history of exercising ROFR. A price far above or below what tracking platforms show rarely closes.</p>
+<p><strong>Current prices and realistic targets.</strong> Firm bids and asks are listed under Indications on <a href="https://trades.graciagroup.com/" target="_blank" rel="noopener">trades.graciagroup.com</a>, and I'm happy to share recent crossed trades on request. If you have a target price in mind, ask me how it compares with recent trades and current bids and asks; also see "Be Realistic" in <a href="https://pre-ipo.graciagroup.com/learn/ten-tips-working-with-a-secondaries-broker" target="_blank" rel="noopener">Ten Tips for Working With a Secondaries Broker</a>.</p>
+
+<h3 class="q" id="demand">What does "demand" mean?</h3>
+<p><strong>Demand is not the same as a firm deal.</strong></p>
+<ul>
+  <li><strong>Demand</strong> (for example "Interested Buyers" on the Demand Board) is a general count of investors who have said they are interested in a company. It doesn't include a price, a size or a commitment.</li>
+  <li><strong>Firm</strong> means a specific investor has given interest <em>plus a price</em>, usually with a size and structure too. Firm bids and offers appear under Indications on <a href="https://trades.graciagroup.com/" target="_blank" rel="noopener">trades.graciagroup.com</a>.</li>
+</ul>
+<p>A company can show dozens of interested buyers and still have no buyer at the price you are asking. Treat demand as a sign of where to look, not as a buyer in hand.</p>
+<p class="top"><a href="#top">↑ Back to contents</a></p>
+</section>
+
+<section class="part">
+<h2 id="start">Getting started</h2>
+
+<h3 class="q" id="minimum">What is your minimum?</h3>
+<p>My minimum transaction size is $250,000.</p>
+
+<h3 class="q" id="direct-spv">Direct shares or an SPV?</h3>
+<ul>
+  <li><strong>Direct shares:</strong> you own the company's shares and appear on its cap table. The buyer pays the full price in cash, the company must approve the transfer and waive or let ROFR lapse. Closing typically takes 45–60 days.</li>
+  <li><strong>SPV:</strong> you own an interest in a vehicle that owns the shares. A manager controls it and may charge upfront fees, management fees and carry. SPVs allow smaller tickets and can close faster, and are often the only route when a company won't approve new names on its cap table.</li>
+</ul>
+<p>With an SPV, know every layer between you and the company. A first-layer SPV holds the shares directly; a second-layer SPV holds an interest in another SPV, adding fees and risk. Ask for the ownership chain if it isn't clear.</p>
+
+<h3 class="q" id="sellers">What do sellers need to provide?</h3>
+<ul>
+  <li><strong>Identity and onboarding:</strong> Rainmaker's Client Engagement Form (CEF), which includes identity verification, and a signed non-exclusive engagement agreement.</li>
+  <li><strong>Direct shares:</strong> proof of shares, such as a share certificate, a Carta (or similar) holdings screenshot, or company confirmation. Documents showing your right to transfer (for example your stock purchase or option agreement) are helpful if you have them.</li>
+  <li><strong>SPV interests (LPs):</strong> proof of ownership and the GP's permission to transfer.</li>
+  <li><strong>SPV interests (GPs raising a new round):</strong> proof of allocation, and proof of shares once the round closes. See <a href="#represent-spv">How do you represent an SPV?</a></li>
+</ul>
+
+<h3 class="q" id="buyers">What do buyers need to provide?</h3>
+<ul>
+  <li><strong>Investor Qualification Form (IQF)</strong> confirming you are an accredited investor (for individuals, generally income above $200,000, or $300,000 with a spouse or partner, in each of the last two years, or net worth above $1 million excluding your primary residence), or a Qualified Client or Qualified Purchaser where the deal requires it. Individuals use <a href="https://www.rainmakersecurities.com/investor-qualification-form-for-natural-persons" target="_blank" rel="noopener">Rainmaker's IQF for natural persons</a>.</li>
+  <li><strong>Proof of funds</strong> is sometimes requested, especially on large or competitive blocks, or when a seller asks for it before signing.</li>
+  <li>Before closing, the SPV or company will run its own subscription and KYC process.</li>
+</ul>
+
+<h3 class="q" id="verify">How do you verify a seller's shares?</h3>
+<p>I require proof before I sign an engagement with a seller, and always before any introduction: proof of shares (share certificates) for direct sales, proof of ownership and GP permission for SPV interests, and proof of allocation for new issues.</p>
+<p>For a few high-demand issuers, Rainmaker requires the company's own sign-off on the shares and accepts only first-layer SPVs.</p>
+
+<h3 class="q" id="cef">Why do I have to fill in the CEF?</h3>
+<p>U.S. broker-dealers must verify who their clients are (Customer Identification Program / KYC), check them against sanctions lists, and watch for money laundering and fraud (AML). Rainmaker's Client Engagement Form is how the firm does this. It protects you too: it is how we confirm the person on the other side is who they say they are. Identity documents are collected through Rainmaker's own forms and held by its compliance team. In my own systems I keep only what I need to work with you, such as your address and investor status.</p>
+
+<h3 class="q" id="new-company">Will you cover a company that isn't listed?</h3>
+<p>Rarely. Before I take on a new company:</p>
+<ul>
+  <li>I usually focus on companies valued at <strong>$500M or more</strong>, where buyers are active and secondary trades are realistic.</li>
+  <li>Rainmaker's compliance team must approve the company. Some issuers are restricted, and I can't work on those at all.</li>
+  <li>I check transferability: the company's bylaws when available, ROFR, any blanket ban on transfers, and whether the share class can actually trade.</li>
+  <li>For sellers, I verify the position first (see <a href="#verify">How do you verify a seller's shares?</a>).</li>
+</ul>
+
+<h3 class="q" id="represent-spv">How do you represent an SPV?</h3>
+<p>If you manage or syndicate an SPV and want me to place it with my investors:</p>
+<ol>
+  <li><strong>Proof of allocation</strong> up front, such as written confirmation from the company or lead investor, or the SPV's subscription documents.</li>
+  <li><strong>Proof of shares</strong> once the SPV has closed and holds the shares, such as a share certificate or a cap table or ledger confirmation.</li>
+  <li><strong>Full deal details</strong>, so buyers can decide quickly, including structure, fees, minimum, investor eligibility and funding deadline.</li>
+  <li><strong>Before making introductions,</strong> a signed non-exclusive engagement agreement and Rainmaker onboarding.</li>
+</ol>
+<p class="top"><a href="#top">↑ Back to contents</a></p>
+</section>
+
+<section class="part">
+<h2 id="closing">Introductions and closing</h2>
+
+<h3 class="q" id="expectations">What do you expect before and after an introduction?</h3>
+<ol>
+  <li><strong>Read the offering details first,</strong> including price, structure, minimum, fees and eligibility. Most questions after an introduction are already answered there.</li>
+  <li><strong>Reply promptly to the counterparty, and say "no" when you can.</strong> A quick no is always welcome; silence is not. Going quiet after terms are agreed hurts the other side and makes future introductions harder.</li>
+  <li><strong>Don't renegotiate after the introduction.</strong> I introduce the parties only once price, size and structure are agreed. Reopening price, or the commission, at that point usually kills the trade and may hurt your reputation in the market.</li>
+  <li><strong>Keep me copied on all communications</strong> with the other side. This is required for compliance, and it keeps the trade from stalling.</li>
+</ol>
+
+<h3 class="q" id="identity">When will I learn who the other side is?</h3>
+<p>Names are shared once all terms are agreed. Before that, I can usually share a general profile, such as the type of holder or investor (employee, early investor, fund, family office), typical ticket size and track record with me. Approved sellers also receive general information on potential buyer matches. I don't share counterparties' identities except through a direct introduction after terms are agreed.</p>
+
+<h3 class="q" id="process">How does a trade work, start to finish?</h3>
+<ol>
+  <li><strong>Indication:</strong> a company, size and price.</li>
+  <li><strong>Onboarding:</strong> engagement agreement, CEF or IQF, and proof of shares or allocation.</li>
+  <li><strong>Match:</strong> I bring buyer and seller to agreement on price, size and structure.</li>
+  <li><strong>Introduction</strong> by email, with me copied.</li>
+  <li><strong>Transfer Notice</strong> signed and sent to the company, which starts the ROFR period (for direct shares).</li>
+  <li><strong>Dataroom access</strong> provided, when available.</li>
+  <li><strong>SPA / STA signed,</strong> buyer wires funds, company or GP approves, and the ledger is updated.</li>
+  <li><strong>Settlement</strong> and invoicing.</li>
+</ol>
+
+<h3 class="q" id="transfer-notice">What are a Transfer Notice and an SPA?</h3>
+<p><strong>Transfer Notice.</strong> For direct shares, the seller must formally notify the company of a proposed sale: buyer, number of shares, price and other terms. Buyer and seller sign it, and it is sent to the company. Its terms are binding for the ROFR period, and the company may also need to approve the transfer.</p>
+<p><strong>SPA / STA.</strong> The Share Purchase Agreement (also called a Stock Purchase or Stock Transfer Agreement) is the definitive contract between buyer and seller. It is signed once ROFR has expired or been waived, and it sets out the representations, payment and closing mechanics. The buyer then wires funds, the company countersigns or approves, and the cap table (often on Carta) is updated. SPV interests use an equivalent assignment or transfer agreement approved by the GP.</p>
+<p>Some companies charge a transfer fee, often $5,000–$10,000. Agree in advance who pays it.</p>
+
+<h3 class="q" id="rofr">What is ROFR?</h3>
+<p>A Right of First Refusal lets the company, or sometimes its existing investors, buy the shares on the same terms as in the Transfer Notice. The period is typically about 30 days. If ROFR is exercised, the seller still sells at the agreed price, just to the company instead of the buyer, and the buyer walks away. A price far below fair value makes this more likely. Preferred shares sometimes carry a different ROFR, or none.</p>
+<p>Rainmaker's engagement agreements cover this case: the fee is earned when the sale completes, whether the shares go to the buyer I introduced or to the company under ROFR.</p>
+
+<h3 class="q" id="spv-transfer">Can an SPV interest be transferred?</h3>
+<p>Usually, but it depends on the SPV's operating agreement. Most require the GP's or manager's consent, and some impose a transfer fee or other conditions. Ask the GP early. Some SPVs can close in about a week, while others take much longer.</p>
+
+<h3 class="q" id="timing">How long does it take?</h3>
+<p>SPV interests can close in about a week when the GP is responsive. Direct share transfers commonly take 45–60 days because of the ROFR period and company approvals. Some companies take longer or block transfers entirely, and I will tell you up front if I expect that.</p>
+
+<h3 class="q" id="ipo">What happens if the company goes public?</h3>
+<p>It depends on what you hold. Direct shares convert into public shares under their terms. An SPV may distribute the public shares to its investors, sell them and distribute cash, or keep holding them, as its documents allow. Lock-ups usually prevent selling for a period after the IPO, and the price can move in the meantime. No IPO is ever guaranteed: a company may be acquired, stay private, or fail.</p>
+<p class="top"><a href="#top">↑ Back to contents</a></p>
+</section>
+
+<div class="signoff">
+  <p>If you have questions, just let me know.</p>
+  <p><strong>Chad Gracia</strong><br>Registered Representative, Rainmaker Securities</p>
+  <p>Indications for accredited investors: <a href="https://trades.graciagroup.com/" target="_blank" rel="noopener">trades.graciagroup.com</a></p>
+</div>
+
+<footer class="disclosure">
+  <p class="lead">DISCLOSURE: Chad Gracia ("Gracia") is a principal The Gracia Group, LLC ("Gracia Group") and a registered agent of Rainmaker Securities, LLC ("RMS"). Gracia Group is a consulting firm and outside business activity of Gracia. Gracia Group is not affiliated with RMS. Rainmaker Securities, LLC ("RMS") is a FINRA registered broker-dealer and SIPC member. Find this broker-dealer and its agents on <a href="https://brokercheck.finra.org" target="_blank" rel="noopener noreferrer">BrokerCheck</a>. Our relationship summary can be found on the <a href="https://www.rainmakersecurities.com" target="_blank" rel="noopener noreferrer">RMS website</a>.</p>
+  <p>RMS is engaged by its clients to make referrals to buyers or sellers of private securities ("Securities"). If such client closes a Securities transaction with a buyer or seller so referred, RMS is entitled to a success fee from the client. Such success fee may be in the form of cash or in warrants to purchase securities of the client or client's affiliate. RMS or RMS representatives may hold equity in its issuer clients or in the issuers of securities purchased or sold by the parties to a transaction.</p>
+  <p>This communication does not represent an offer or solicitation to buy or sell Securities. Such an offer must be made via definitive legal documentation by the seller of securities.</p>
+  <p>Investments in the Securities are speculative and involve a high degree of risk. An investor in the Securities should have little to no need for liquidity in the foreseeable future and have sufficient finances to withstand the loss of the entire investment.</p>
+  <p>RMS does not recommend the purchase or sale of Securities. Potential buyers or sellers of the Securities should seek professional counsel prior to entering into any transaction.</p>
+  <h4>RISK FACTORS</h4>
+  <p>Investments in the Securities are speculative and involve a high degree of risk. Companies engaging in private placements may be early stage and high risk. You should be able to afford the increased risk of loss with such investments, including the potential of a total loss.</p>
+  <p>An investor in the Securities should have little to no need for liquidity in the foreseeable future. Unlike an investment purchased on a stock exchange, an investment in a private placement is highly illiquid. You will most likely be investing in restricted securities, may have difficulty finding a buyer for the securities when you can resell and, as a result, may need to hold the securities indefinitely.</p>
+  <p>Limited disclosure Information. Companies engaging in private placements are not required to provide the disclosure that would be required in a registered offering. You may have less information to make an informed investment decision than, for example, stock purchased on a stock exchange, including information that may help you determine whether the price asked for the investment is a fair price. Potential buyers or sellers of the Securities should seek professional counsel prior to entering into any transaction.</p>
+</footer>
+
+</div>
+</body>
+</html>"""
+
+
 def lambda_handler(event, context):
     """Thin shell around _route: renders the "viewing as" bar whenever the browser
     carries a valid admin cookie but the session cookie points at somebody else.
@@ -8749,6 +9055,12 @@ def lambda_handler(event, context):
                             "Cache-Control": "max-age=300",
                             "X-Robots-Tag": "noindex, nofollow"},
                 "body": COMMISSION_TIERS_HTML}
+    if method == "GET" and (raw_path in ("/faq", "/faq/") or (event.get("queryStringParameters") or {}).get("view") == "faq"):
+        return {"statusCode": 200,
+                "headers": {"Content-Type": "text/html; charset=utf-8",
+                            "Cache-Control": "max-age=300",
+                            "X-Robots-Tag": "noindex, nofollow"},
+                "body": FAQ_HTML}
     # Admin "view as" persistence. An admin's explicit ?as=<id> is remembered in
     # a signed gg_view_as cookie so every desk tab and in-page link (which carry
     # no ?as=) keeps the viewed client until "back to admin" (resume_admin) or
