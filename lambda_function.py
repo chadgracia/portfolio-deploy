@@ -8814,19 +8814,14 @@ FAQ_HTML = """<!DOCTYPE html>
           <li><a href="#direct-spv">Direct shares or an SPV?</a></li>
           <li><a href="#sellers">What do sellers need to provide?</a></li>
           <li><a href="#buyers">What do buyers need to provide?</a></li>
-        </ul>
-      </div>
-    </div>
-    <div>
-      <div class="toc-group">
-        <h3><a href="#start">Getting started (continued)</a></h3>
-        <ul>
           <li><a href="#verify">How do you verify a seller's shares?</a></li>
           <li><a href="#cef">Why do I have to fill in the CEF?</a></li>
           <li><a href="#new-company">Will you cover a company that isn't listed?</a></li>
           <li><a href="#represent-spv">How do you represent an SPV?</a></li>
         </ul>
       </div>
+    </div>
+    <div>
       <div class="toc-group">
         <h3><a href="#closing">Introductions and closing</a></h3>
         <ul>
